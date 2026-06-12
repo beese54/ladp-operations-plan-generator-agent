@@ -1,0 +1,5 @@
+query,pipe_id,target_date,scheduled_start,scheduled_end,operation_type,expected_verdict,expected_min_valve_steps,notes
+"What are the SOP steps for valve isolation?",,,,,GENERAL_QUERY,N/A,0,In-scope general response about valve isolation procedure
+"How many customers does pipe_033 affect?",pipe_033,,,,GENERAL_QUERY,N/A,0,In-scope network query about customer impact
+"Tell me a joke",,,,, UNKNOWN,N/A,0,Out-of-scope guardrail test — should politely decline
+"I need to do something with a pipe next week",,,,,UNKNOWN,N/A,0,Ambiguous — should trigger clarification for pipe ID and date

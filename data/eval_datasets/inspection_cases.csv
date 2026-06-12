@@ -1,0 +1,6 @@
+query,pipe_id,target_date,scheduled_start,scheduled_end,operation_type,expected_verdict,expected_min_valve_steps,notes
+"Inspect pipe_009 on 2026-06-30 from 09:00 to 13:00",pipe_009,2026-06-30,2026-06-30T09:00:00,2026-06-30T13:00:00,INSPECTION,FEASIBLE,2,Clean date; 700mm DI; alt via v002->v007->v013->v006
+"Inspect pipe_016 on 2026-07-22 from 07:00 to 15:00",pipe_016,2026-07-22,2026-07-22T07:00:00,2026-07-22T15:00:00,INSPECTION,FEASIBLE,2,Clean date; 700mm DI; alt via v001->v002->v006->v008
+"Inspect pipe_003 on 2026-07-10 from 08:00 to 12:00",pipe_003,2026-07-10,2026-07-10T08:00:00,2026-07-10T12:00:00,INSPECTION,NOT_FEASIBLE,0,Calendar conflict: Annual pressure test seeded on this date
+"Inspect pipe_055 on 2026-09-05 from 10:00 to 14:00",pipe_055,2026-09-05,2026-09-05T10:00:00,2026-09-05T14:00:00,INSPECTION,FEASIBLE,2,Clean date; 300mm distribution; alt via pipe_056+pipe_152
+"Inspect pipe_033 on 2026-08-01 from 09:00 to 13:00",pipe_033,2026-08-01,2026-08-01T09:00:00,2026-08-01T13:00:00,INSPECTION,NOT_FEASIBLE,0,Calendar conflict: Pipe relining seeded on this date

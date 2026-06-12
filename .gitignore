@@ -1,0 +1,20 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+data/chroma_db/
+data/calendar.db
+*.db
+*.db-wal
+*.db-shm
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+
+# Frontend dependencies
+node_modules/
+
+# MLflow run artifacts
+mlruns/

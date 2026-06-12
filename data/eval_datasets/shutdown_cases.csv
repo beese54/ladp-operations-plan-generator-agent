@@ -1,0 +1,9 @@
+query,pipe_id,target_date,scheduled_start,scheduled_end,operation_type,expected_verdict,expected_min_valve_steps,notes
+"Can I shut down pipe_003 on 2026-07-10 from 08:00 to 16:00?",pipe_003,2026-07-10,2026-07-10T08:00:00,2026-07-10T16:00:00,SHUTDOWN,NOT_FEASIBLE,0,Calendar conflict: Annual pressure test seeded on this date
+"Can I shut down pipe_003 on 2026-06-20 from 08:00 to 16:00?",pipe_003,2026-06-20,2026-06-20T08:00:00,2026-06-20T16:00:00,SHUTDOWN,FEASIBLE,2,Clean date; 900mm trunk with strong looped alt path via v001->v003/v004
+"Can I shut down pipe_005 on 2026-09-15 from 09:00 to 17:00?",pipe_005,2026-09-15,2026-09-15T09:00:00,2026-09-15T17:00:00,SHUTDOWN,FEASIBLE,2,Clean date; 700mm primary; alt path via pipe_006 (v001->v004) and cross-links
+"Can I shut down pipe_033 on 2026-08-01 from 06:00 to 20:00?",pipe_033,2026-08-01,2026-08-01T06:00:00,2026-08-01T20:00:00,SHUTDOWN,NOT_FEASIBLE,0,Calendar conflict: Pipe relining seeded on this date
+"Can I shut down pipe_033 on 2026-09-10 from 08:00 to 16:00?",pipe_033,2026-09-10,2026-09-10T08:00:00,2026-09-10T16:00:00,SHUTDOWN,FEASIBLE,2,Clean date; 700mm primary; alt via v002->v007->v013->v015->v014
+"Can I shut down pipe_016 on 2026-07-22 from 07:00 to 15:00?",pipe_016,2026-07-22,2026-07-22T07:00:00,2026-07-22T15:00:00,SHUTDOWN,FEASIBLE,2,Clean date; 700mm DI; alt via v001->v002->v006->v008
+"Can I shut down pipe_055 on 2026-09-20 from 09:00 to 14:00?",pipe_055,2026-09-20,2026-09-20T09:00:00,2026-09-20T14:00:00,SHUTDOWN,FEASIBLE,2,Clean date; 300mm distribution; alt via pipe_056+pipe_152 (v005->v023->v022)
+"Can I shut down pipe_011 on 2026-06-25 from 08:00 to 16:00?",pipe_011,2026-06-25,2026-06-25T08:00:00,2026-06-25T16:00:00,SHUTDOWN,FEASIBLE,2,Clean date; 700mm Steel; alt via pipe_012 (v006->v009) + pipe_020 (v009->v008)

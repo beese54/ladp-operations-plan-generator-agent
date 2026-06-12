@@ -1,0 +1,136 @@
+{
+  "project": "Water Network Operations Plan Generator",
+  "version": "1.0.0",
+  "description": "Multi-agent system for generating water network operations plans via natural language queries. Grounds all network topology facts in Neo4j Aura to eliminate hallucinations.",
+
+  "tech_stack": {
+    "llm_primary": "claude-sonnet-4-6 (Anthropic)",
+    "llm_secondary": "meta-llama/Llama-3.3-70B-Instruct-Turbo (Together.ai, OpenAI-compatible API)",
+    "orchestration": "LangGraph 1.1.6",
+    "graph_db": "Neo4j Aura (neo4j driver 6.x, neo4j+s:// URI)",
+    "vector_db": "ChromaDB 1.5.6 (all-MiniLM-L6-v2 embeddings)",
+    "calendar_db": "SQLite (WAL mode)",
+    "api": "FastAPI 0.111.0",
+    "ui": "Streamlit 1.56.0",
+    "python": "3.12+"
+  },
+
+  "llm_provider_assignment": {
+    "intent_parser": "anthropic",
+    "neo4j_agent": "anthropic",
+    "ops_plan_generator": "anthropic",
+    "orchestrator_response": "anthropic",
+    "sop_agent": "together",
+    "historical_agent": "together",
+    "general_response": "together",
+    "calendar_agent": "none"
+  },
+
+  "neo4j_schema": {
+    "nodes": {
+      "Valve": {
+        "properties": ["id", "road_name", "status", "pressure_mRL", "year_installed"],
+        "constraints": ["UNIQUE(id)"]
+      },
+      "Junction": {
+        "properties": ["junction_id", "x", "y", "elevation", "road_name"],
+        "constraints": ["UNIQUE(junction_id)"]
+      },
+      "Tank": {
+        "properties": ["id", "capacity_mgd"],
+        "constraints": ["UNIQUE(id)"]
+      }
+    },
+    "relationships": {
+      "PIPE": {
+        "from": "Valve",
+        "to": "Valve",
+        "properties": [
+          "pipe_id", "from_id", "to_id", "diameter_mm", "length_m",
+          "material", "status", "road_name", "year_installed",
+          "has_customer", "Number_of_customers"
+        ],
+        "note": "Physical pipes are modelled as bidirectional pairs (e.g. pipe_151 and pipe_152 connect the same two valves in opposite directions)"
+      }
+    }
+  },
+
+  "chromadb_collections": {
+    "sop_documents": {
+      "embedding_model": "all-MiniLM-L6-v2",
+      "chunk_size": 800,
+      "chunk_overlap": 100,
+      "metadata_fields": ["source_file", "sop_id", "sop_title", "section", "version", "tags", "chunk_index"]
+    },
+    "historical_plans": {
+      "embedding_model": "all-MiniLM-L6-v2",
+      "chunk_size": 800,
+      "chunk_overlap": 100,
+      "metadata_fields": ["plan_id", "plan_title", "pipe_id", "operation_type", "execution_date", "outcome", "chunk_index"]
+    }
+  },
+
+  "sqlite_tables": [
+    "scheduled_operations",
+    "operation_affected_consumers",
+    "scheduling_conflicts",
+    "chat_sessions"
+  ],
+
+  "api_endpoints": [
+    {"method": "POST", "path": "/api/v1/chat", "description": "Main chatbot entry; invokes full LangGraph orchestrator"},
+    {"method": "GET",  "path": "/api/v1/schedule", "description": "List upcoming scheduled operations"},
+    {"method": "POST", "path": "/api/v1/schedule", "description": "Create a new scheduled operation"},
+    {"method": "DELETE", "path": "/api/v1/schedule/{operation_id}", "description": "Cancel a scheduled operation"},
+    {"method": "GET",  "path": "/api/v1/health", "description": "Health check for all data sources"}
+  ],
+
+  "langgraph_nodes": [
+    "intent_parser",
+    "general_response",
+    "clarification",
+    "time_clarification",
+    "calendar_agent",
+    "neo4j_agent",
+    "sop_agent",
+    "historical_agent",
+    "ops_plan_generator",
+    "orchestrator_response",
+    "error_handler"
+  ],
+
+  "graph_routing": {
+    "intent_parser": {
+      "GENERAL_QUERY": "general_response",
+      "OPS_QUERY_INCOMPLETE": "clarification",
+      "OPS_QUERY_NO_TIME": "time_clarification",
+      "OPS_QUERY_COMPLETE": ["calendar_agent", "neo4j_agent"]
+    },
+    "neo4j_agent": {
+      "SUCCESS": ["sop_agent", "historical_agent"],
+      "ERROR": "error_handler"
+    },
+    "converge_at": "ops_plan_generator",
+    "converge_inputs": ["calendar_agent", "sop_agent", "historical_agent"]
+  },
+
+  "guardrails": {
+    "general_response_node": {
+      "scope": "Water network operations, SOPs, network topology queries, schedule inquiries",
+      "refusal_triggers": ["non-water-utility topics", "requests to modify Aura schema destructively", "requests to generate false network data"],
+      "clarification_max_rounds": 2
+    }
+  },
+
+  "prompt_caching": {
+    "applied_to": ["ops_plan_generator system prompt", "sop_context block"],
+    "not_applied_to": ["topology_context (fully dynamic)", "calendar_context (fully dynamic)"],
+    "provider": "anthropic only (Together.ai does not support prompt caching)"
+  },
+
+  "output_format": {
+    "feasibility_verdict": "FEASIBLE | NOT_FEASIBLE | CONDITIONAL",
+    "valve_sequence": "Ordered list of OpsValveAction: {valve_id, road_name, action, sequence_number, reason, timing_note, current_status}",
+    "supporting_sections": ["pre_operation_checks", "estimated_duration_hours", "affected_consumers_summary", "notifications_required", "post_operation_steps", "safety_warnings", "alternative_recommendation"]
+  }
+}
