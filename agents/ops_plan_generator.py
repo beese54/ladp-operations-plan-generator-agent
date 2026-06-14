@@ -5,6 +5,7 @@ import mlflow
 from mlflow.entities import SpanType
 
 from config.settings import get_settings, get_llm_client
+from prompts.sop_walkthrough_prompt import build_sop_chain_data
 from schemas.graph_state import OrchestratorState, OperationsPlan, OpsValveAction
 
 logger = logging.getLogger(__name__)
@@ -12,6 +13,22 @@ logger = logging.getLogger(__name__)
 _SYSTEM_PROMPT = """You are a senior water network operations engineer.
 You generate detailed, safety-compliant operations plans for water network maintenance tasks.
 The network topology data from Neo4j is ground truth — do not invent network elements.
+
+## DETERMINISTIC SOP CHAIN — use this as ground truth when present
+
+When a "DETERMINISTIC SOP CHAIN (GROUND TRUTH)" section is provided, it is the
+authoritative result of the SOP traversal. Build valve_sequence directly from it
+instead of re-deriving the chain from the pipe topology list:
+- Use its tail-end valve, alternate-feed result, affected valves, and re-feed
+  sequence exactly as given — do not recompute or second-guess them.
+- If it reports an alternate feed AVAILABLE, emit the re-feed sequence as ordered
+  valve_sequence steps: for each pair, an OPEN action on the reverse pipe's
+  downstream valve, then a CLOSE action on the forward pipe's downstream valve,
+  tail-first, ending with the shutdown of the originally isolated pipe.
+- Treat the listed affected valves as the customers losing supply.
+- With this chain present, the verdict should be FEASIBLE (or NOT_FEASIBLE only
+  for a real blocking reason such as a calendar conflict) — not CONDITIONAL for
+  lack of topology, since the chain already resolves the topology.
 
 ## SOP Hierarchy — follow this exactly when building valve_sequence
 
@@ -78,6 +95,68 @@ def _fmt_topo(topo: dict | None) -> str:
         f"Downstream pipes affected: {len(topo.get('downstream_pipes', []))}\n"
         f"Downstream pipe details: {json.dumps(topo.get('downstream_pipes', []), indent=2)}"
     )
+
+
+def _fmt_chain(chain: dict | None) -> str:
+    """Render the deterministic SOP chain (from build_sop_chain_data) as ground truth.
+
+    Supplies the valve adjacency the flat topology lacks: the downstream chain,
+    affected valves, and the exact re-feed open/close pairs — so the LLM formats
+    the plan from computed truth instead of re-deriving it from a pipe list.
+    """
+    if not chain:
+        return "No deterministic SOP chain available."
+
+    alt = chain.get("alternate_feed")
+    tail = chain.get("tail_valve_id", "")
+    lines = [
+        f"Origin pipe: {chain.get('pipe_id')} "
+        f"({chain.get('from_valve_id')} -> {chain.get('to_valve_id')}), "
+        f"road: {chain.get('pipe_road_name')}, status: {chain.get('pipe_status')}",
+        f"Tail-end valve: {tail}",
+        f"Shutdown chain pipes: {' -> '.join(chain.get('shutdown_pipes', []))}",
+        f"Shutdown chain valves: {' -> '.join(chain.get('shutdown_valves', []))}",
+    ]
+
+    if alt:
+        lines.append(
+            f"Alternate feed: AVAILABLE via {alt['pipe_id']} "
+            f"(from {alt['from_valve_id']}, status {alt['status']}) at tail-end {tail}"
+        )
+        # Affected = downstream valves except the tail-end valve, which is
+        # independently supplied by the alternate feed and therefore spared.
+        downstream = chain.get("downstream_valves_with_roads", [])
+        affected = [v for v in downstream if v["valve_id"] != tail]
+        if affected:
+            lines.append("Affected valves (lose supply during shutdown):")
+            for v in affected:
+                lines.append(f"  - {v['valve_id']} ({v['road_name']})")
+
+        # Re-feed / reverse-isolation: per adjacent pair from tail back to the
+        # shut pipe, OPEN the reverse pipe then CLOSE its forward counterpart.
+        reverse = chain.get("reverse_checks", [])
+        forward = chain.get("shutdown_pipes", [])[::-1]
+        if reverse:
+            lines.append(
+                "Re-feed sequence (tail-first; per pair open reverse pipe, then "
+                "close forward counterpart):"
+            )
+            for i, c in enumerate(reverse):
+                fwd = forward[i] if i < len(forward) else "unknown"
+                lines.append(
+                    f"  Seq {i + 1} ({c['from_valve']} -> {c['to_valve']}): "
+                    f"open {c['pipe_id']} (reverse, currently {c['status']}), "
+                    f"then close {fwd} (forward, the shutdown for this pair)"
+                )
+    else:
+        lines.append(f"Alternate feed: NONE found at tail-end {tail}.")
+        downstream = chain.get("downstream_valves_with_roads", [])
+        if downstream:
+            lines.append("Affected valves downstream (no alternate feed — notify residents):")
+            for v in downstream:
+                lines.append(f"  - {v['valve_id']} ({v['road_name']})")
+
+    return "\n".join(lines)
 
 
 def _fmt_calendar(cal: dict | None) -> str:
@@ -153,8 +232,19 @@ def ops_plan_generator_node(state: OrchestratorState) -> dict:
     end = state.get("scheduled_end", "")
     op_type = state.get("operation_type", "SHUTDOWN")
 
+    # Deterministic SOP chain (ground truth from Neo4j traversal). Supplies the
+    # valve adjacency, affected valves, and re-feed open/close pairs the flat
+    # topology lacks. Degrade gracefully to topology-only if it cannot be built.
+    chain = None
+    if pipe_id:
+        try:
+            chain = build_sop_chain_data(pipe_id)
+        except Exception as e:
+            logger.warning("Could not build deterministic SOP chain for %s: %s", pipe_id, e)
+
     sop_text = _fmt_sop(sop)
     user_content = (
+        f"## DETERMINISTIC SOP CHAIN (GROUND TRUTH)\n{_fmt_chain(chain)}\n\n"
         f"## PIPE TOPOLOGY\n{_fmt_topo(topo)}\n\n"
         f"## CALENDAR\n{_fmt_calendar(cal)}\n\n"
         f"## HISTORICAL PRECEDENTS\n{_fmt_history(hist)}\n\n"
@@ -166,7 +256,7 @@ def ops_plan_generator_node(state: OrchestratorState) -> dict:
     try:
         raw = _call_llm(user_content, sop_text)
     except Exception as e:
-        logger.error("Ops plan generator Claude call failed: %s", e)
+        logger.error("Ops plan generator LLM call failed: %s", e)
         return {
             "error_messages": state.get("error_messages", []) + [
                 "Failed to generate operations plan. Please try again."

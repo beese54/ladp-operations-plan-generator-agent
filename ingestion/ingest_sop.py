@@ -1,7 +1,8 @@
 """
 Ingest SOP documents from data/seed/sop_documents/ into ChromaDB.
 Run: python -m ingestion.ingest_sop
-Idempotent: re-running will upsert without creating duplicates.
+Idempotent full re-sync: re-running replaces each document's chunks so that
+edits (changed text, added or removed chunks) are reflected without duplicates.
 """
 import logging
 import sys
@@ -56,7 +57,6 @@ def ingest_sop_documents(sop_dir: Path = SOP_DIR) -> int:
         chunk_overlap=CHUNK_OVERLAP,
     )
     collection = get_or_create_collection(COLLECTION_SOP)
-    existing_ids: set[str] = set(collection.get()["ids"])
 
     total_inserted = 0
     for filepath in files:
@@ -71,8 +71,6 @@ def ingest_sop_documents(sop_dir: Path = SOP_DIR) -> int:
 
         for i, chunk in enumerate(chunks):
             chunk_id = f"{stem}_chunk_{i:04d}"
-            if chunk_id in existing_ids:
-                continue
             ids.append(chunk_id)
             docs.append(chunk)
             metas.append({
@@ -84,12 +82,15 @@ def ingest_sop_documents(sop_dir: Path = SOP_DIR) -> int:
                 "tags": "",
             })
 
+        # Full re-sync per file: drop any prior chunks for this document so that
+        # edits (changed text or fewer chunks) are reflected, not just appended.
+        # Upsert alone would leave stale chunks when the doc shrinks or a chunk's
+        # text changes at an index that already exists.
+        collection.delete(where={"sop_id": stem})
         if ids:
             collection.upsert(ids=ids, documents=docs, metadatas=metas)
             total_inserted += len(ids)
-            logger.info("  %s: %d chunks inserted", filepath.name, len(ids))
-        else:
-            logger.info("  %s: all chunks already present", filepath.name)
+            logger.info("  %s: %d chunks synced", filepath.name, len(ids))
 
     logger.info("SOP ingestion complete. Total new chunks: %d", total_inserted)
     return total_inserted

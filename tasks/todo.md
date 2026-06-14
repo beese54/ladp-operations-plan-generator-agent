@@ -63,3 +63,23 @@
 
 ## Phase 9 — Verification
 - [x] 9.1 scripts/verify_connections.py
+
+## Phase 10 — pipe_084 SOP: deterministic chain wiring (2026-06-15)
+- [x] 10.1 Fix ingest_sop.py re-sync bug (skip-if-exists → delete+insert per doc)
+- [x] 10.2 Re-ingest SOP docs; verify ChromaDB matches docx (0 mismatches)
+- [x] 10.3 Diagnose: main chat path emits CONDITIONAL, no affected valves / re-feed
+- [x] 10.4 Wire build_sop_chain_data into ops_plan_generator (ground-truth chain block)
+- [x] 10.5 Update _SYSTEM_PROMPT to consume deterministic chain
+- [x] 10.6 Verify invoke_graph(pipe_084) emits affected valves (035,036) + re-feed pairs
+
+### Review (2026-06-15)
+- ingest_sop.py: skip-if-exists → per-doc delete+upsert (true re-sync); ChromaDB now
+  matches docx exactly (0 mismatches, 16 chunks).
+- ops_plan_generator.py: builds deterministic SOP chain via build_sop_chain_data,
+  renders a GROUND TRUTH block (tail valve, alt feed, affected valves, re-feed
+  open/close pairs); _SYSTEM_PROMPT instructs the model to consume it. Graceful
+  fallback to topology-only if the chain can't be built.
+- Result: pipe_084 plan now FEASIBLE with affected valves (035,036) and the full
+  reverse re-feed sequence — even when SOP RAG retrieval fails.
+- Pre-existing, out-of-scope: historical_agent RustBindingsAPI bug; SOP RAG
+  relative-path error outside server context.
