@@ -6,8 +6,8 @@ REVIEW_SESSION_NAME  = "logical-correctness-review"
 
 # USD per 1 000 tokens — update when provider pricing changes
 COST_TABLE: dict[str, float] = {
-    "claude-sonnet-4-6-input":  0.003,
-    "claude-sonnet-4-6-output": 0.015,
+    "gpt-5.4-mini-pub-input":   0.00025,
+    "gpt-5.4-mini-pub-output":  0.002,
     "llama-3.3-70b-input":      0.0009,
     "llama-3.3-70b-output":     0.0009,
 }

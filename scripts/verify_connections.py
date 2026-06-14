@@ -46,10 +46,10 @@ def test_sqlite() -> bool:
     return True
 
 
-def test_anthropic() -> bool:
-    from config.settings import get_anthropic_client
-    client = get_anthropic_client()
-    client.models.list(limit=1)
+def test_azure_openai() -> bool:
+    from config.settings import get_azure_openai_client
+    client = get_azure_openai_client()
+    client.models.list()
     return True
 
 
@@ -75,9 +75,9 @@ if __name__ == "__main__":
     results = [
         check("Neo4j Aura",  test_neo4j),
         check("ChromaDB",    test_chromadb),
-        check("SQLite",      test_sqlite),
-        check("Anthropic",   test_anthropic),
-        check("Together.ai", test_together),
+        check("SQLite",       test_sqlite),
+        check("Azure OpenAI", test_azure_openai),
+        check("Together.ai",  test_together),
     ]
 
     print()

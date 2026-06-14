@@ -54,5 +54,5 @@ class HealthResponse(BaseModel):
     neo4j: str
     chromadb: str
     sqlite: str
-    anthropic: str
+    azure_openai: str
     timestamp: str

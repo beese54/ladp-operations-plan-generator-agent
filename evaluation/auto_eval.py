@@ -64,10 +64,11 @@ class AutoEvaluator:
                     "session_id":     session_id,
                 })
 
-                # Cost estimate from token counts captured by anthropic.autolog
+                # Cost estimate from token counts captured by openai.autolog
+                from config.settings import get_settings
                 usage = result.get("_usage") or {}
                 cost  = estimate_cost(
-                    "claude-sonnet-4-6",
+                    get_settings().azure_openai_chat_deployment_name,
                     usage.get("input_tokens", 0),
                     usage.get("output_tokens", 0),
                 )

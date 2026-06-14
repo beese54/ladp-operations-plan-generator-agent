@@ -36,7 +36,7 @@ with st.sidebar:
             resp = httpx.get(f"{API_BASE}/health", timeout=10)
             data = resp.json()
             for svc, status in data.items():
-                if svc in ("neo4j", "chromadb", "sqlite", "anthropic"):
+                if svc in ("neo4j", "chromadb", "sqlite", "azure_openai"):
                     icon = "✅" if status == "OK" else "❌"
                     st.write(f"{icon} **{svc}**: {status}")
         except Exception as e:

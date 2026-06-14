@@ -115,33 +115,17 @@ def _fmt_history(hist: dict | None) -> str:
 def _call_llm(user_content: str, sop_text: str) -> str:
     s = get_settings()
     client = get_llm_client("ops_plan_generator")
-    provider = s.agent_providers.get("ops_plan_generator", "anthropic")
 
-    if provider == "anthropic":
-        response = client.messages.create(
-            model=s.anthropic_model,
-            max_tokens=4096,
-            system=[
-                {"type": "text", "text": _SYSTEM_PROMPT,
-                 "cache_control": {"type": "ephemeral"}},
-                {"type": "text", "text": f"## SOP PRINCIPLES\n{sop_text}",
-                 "cache_control": {"type": "ephemeral"}},
-            ],
-            messages=[{"role": "user", "content": user_content}],
-        )
-        return response.content[0].text
-    else:
-        # OpenAI-compatible (Together.ai, etc.)
-        response = client.chat.completions.create(
-            model=s.together_model,
-            messages=[
-                {"role": "system", "content": f"{_SYSTEM_PROMPT}\n\n## SOP PRINCIPLES\n{sop_text}"},
-                {"role": "user", "content": user_content},
-            ],
-            max_tokens=4096,
-            temperature=0.0,
-        )
-        return response.choices[0].message.content or "{}"
+    response = client.chat.completions.create(
+        model=s.azure_openai_chat_deployment_name,
+        messages=[
+            {"role": "system", "content": f"{_SYSTEM_PROMPT}\n\n## SOP PRINCIPLES\n{sop_text}"},
+            {"role": "user", "content": user_content},
+        ],
+        max_completion_tokens=4096,
+        temperature=0.0,
+    )
+    return response.choices[0].message.content or "{}"
 
 
 def _parse_plan(raw: str) -> dict | None:

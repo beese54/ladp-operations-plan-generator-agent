@@ -41,7 +41,7 @@ def sop_agent_node(state: OrchestratorState) -> dict:
             "agents_completed": state.get("agents_completed", []) + ["sop"],
         }
 
-    # Summarise principles via Together.ai (or Anthropic if configured)
+    # Summarise principles via Together.ai (or Azure OpenAI if configured)
     principles = _summarise_principles(chunks, op_type)
 
     return {
@@ -61,27 +61,20 @@ def _summarise_principles(chunks: list[dict], op_type: str) -> list[str]:
 
     try:
         provider = s.agent_providers.get("sop_agent", "together")
-        if provider == "anthropic":
-            response = client.messages.create(
-                model=s.anthropic_model,
-                max_tokens=512,
-                system=[{"type": "text", "text": _SYSTEM_PROMPT,
-                          "cache_control": {"type": "ephemeral"}}],
-                messages=[{"role": "user", "content": user_msg}],
-            )
-            raw = response.content[0].text
-        else:
-            # Together.ai (OpenAI-compatible)
-            response = client.chat.completions.create(
-                model=s.together_model,
-                messages=[
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": user_msg},
-                ],
-                max_tokens=512,
-                temperature=0.2,
-            )
-            raw = response.choices[0].message.content or "[]"
+        model = (
+            s.azure_openai_chat_deployment_name if provider == "azure"
+            else s.together_model
+        )
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            max_completion_tokens=512,
+            temperature=0.2,
+        )
+        raw = response.choices[0].message.content or "[]"
 
         # Strip markdown fences if present
         raw = raw.strip()

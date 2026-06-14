@@ -52,10 +52,10 @@ This is a **multi-agent LangGraph system** that answers water utility operator q
 POST /api/v1/chat
   → chat.py route
   → invoke_graph(message, session_id)       # agents/orchestrator.py
-  → intent_parser_node                       # Claude Sonnet — extracts pipe_id, date, op_type
+  → intent_parser_node                       # Azure OpenAI — extracts pipe_id, date, op_type
   → [calendar_agent, neo4j_agent]           # parallel
   → [sop_agent, historical_agent]           # parallel, after neo4j
-  → ops_plan_generator_node                 # Claude Sonnet — synthesizes JSON plan
+  → ops_plan_generator_node                 # Azure OpenAI — synthesizes JSON plan
   → orchestrator_response_node              # formats Markdown
 ```
 
@@ -78,12 +78,12 @@ The graph is built once as a singleton (`get_graph()`) and reused across request
 
 | Agent | LLM | Source | Output |
 |-------|-----|--------|--------|
-| `intent_parser_node` | Claude Sonnet | user query | pipe_id, date, op_type, confidence |
-| `neo4j_agent_node` | Claude Sonnet | Neo4j | TopologyContext (valves, downstream, alt path) |
+| `intent_parser_node` | Azure OpenAI | user query | pipe_id, date, op_type, confidence |
+| `neo4j_agent_node` | Azure OpenAI | Neo4j | TopologyContext (valves, downstream, alt path) |
 | `calendar_agent_node` | none (SQL) | SQLite | CalendarContext (conflicts, blocking) |
 | `sop_agent_node` | Llama 3.3 70B* | ChromaDB | SOPContext (retrieved chunks, principles) |
 | `historical_agent_node` | Llama 3.3 70B* | ChromaDB | HistoricalContext (similar past plans) |
-| `ops_plan_generator_node` | Claude Sonnet | all contexts | OperationsPlan JSON |
+| `ops_plan_generator_node` | Azure OpenAI | all contexts | OperationsPlan JSON |
 
 *Configurable via `AGENT_PROVIDER_SOP_AGENT` / `AGENT_PROVIDER_HISTORICAL_AGENT` env vars.
 
@@ -93,7 +93,7 @@ The graph is built once as a singleton (`get_graph()`) and reused across request
 
 ### LLM Client Routing
 
-`config/settings.py:get_llm_client(agent_name)` returns either `Anthropic` or `OpenAI` (Together.ai-compatible) client based on `settings.agent_providers` mapping. Prompt caching is enabled via `cache_control: {"type": "ephemeral"}` on system blocks — do not add the deprecated `betas=["prompt-caching-2024-07-31"]` kwarg (removed in anthropic SDK 0.95+).
+`config/settings.py:get_llm_client(agent_name)` returns either an `AzureOpenAI` or `OpenAI` (Together.ai-compatible) client based on `settings.agent_providers` mapping — provider values are `"azure"`, `"together"`, or `"none"` (deterministic agents). Both clients use the OpenAI `chat.completions.create` API with `max_completion_tokens`. The system was migrated off Anthropic Claude — there are no `messages.create`, `cache_control`, or `anthropic` SDK calls left; do not reintroduce them.
 
 ### Data Stores
 

@@ -3,22 +3,21 @@ MLflow tracing setup for the Water Network Ops Generator.
 
 Call setup_mlflow_tracing() once at API startup (api/main.py lifespan).
 
-Three autolog integrations run together:
+Two autolog integrations run together:
   mlflow.langchain.autolog()   — traces LangGraph node execution (the graph structure)
-  mlflow.anthropic.autolog()   — traces raw Anthropic SDK calls (tokens, latency, prompts)
-  mlflow.openai.autolog()      — traces Together.ai calls via OpenAI-compat client
+  mlflow.openai.autolog()      — traces Azure OpenAI + Together.ai calls (OpenAI-compat client)
 
 This produces a fully nested Trace Graph View in the MLflow UI:
   [AGENT] LangGraph.invoke
     ├─ [AGENT] intent_parser
-    │    └─ [LLM] anthropic.messages.create
+    │    └─ [LLM] openai.chat.completions
     ├─ [TOOL]  calendar_check
     ├─ [RETRIEVER] neo4j_topology
     ├─ [RETRIEVER] sop_retrieval
     │    └─ [LLM] openai.chat.completions
     ├─ [RETRIEVER] historical_retrieval
     └─ [AGENT] ops_plan_generator
-         └─ [LLM] anthropic.messages.create
+         └─ [LLM] openai.chat.completions
 """
 
 import json
@@ -28,7 +27,6 @@ import tempfile
 
 import mlflow
 import mlflow.langchain
-import mlflow.anthropic
 import mlflow.openai
 
 logger = logging.getLogger(__name__)
@@ -46,10 +44,7 @@ def setup_mlflow_tracing() -> None:
     # in mlflow 3.x — model logging is handled explicitly via prompts.py (pickle-free)
     mlflow.langchain.autolog(log_traces=True)
 
-    # Token-level detail for raw Anthropic SDK calls
-    mlflow.anthropic.autolog()
-
-    # Token-level detail for Together.ai (OpenAI-compatible client)
+    # Token-level detail for Azure OpenAI + Together.ai (OpenAI-compatible client)
     mlflow.openai.autolog()
 
     logger.info("MLflow tracing enabled — experiment: %s, URI: %s",

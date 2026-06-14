@@ -14,16 +14,9 @@ Usage (model-agnostic):
 
     user_msg = render_sop_prompt("pipe_084")
 
-    # Anthropic
-    response = client.messages.create(
-        model=model, max_tokens=2048,
-        system=SOP_WALKTHROUGH_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_msg}],
-    )
-
-    # OpenAI-compatible (Together.ai, etc.)
+    # OpenAI-compatible (Azure OpenAI, Together.ai, etc.)
     response = client.chat.completions.create(
-        model=model, temperature=0.0, max_tokens=2048,
+        model=model, temperature=0.0, max_completion_tokens=2048,
         messages=[
             {"role": "system", "content": SOP_WALKTHROUGH_SYSTEM_PROMPT},
             {"role": "user",   "content": user_msg},
@@ -45,7 +38,7 @@ from tools.neo4j_tools import get_pipe_and_valves
 
 # ── System prompt ──────────────────────────────────────────────────────────────
 # Registered in MLflow via evaluation/prompts.py.
-# Keep model-agnostic: no cache_control, no Anthropic/OpenAI-specific fields.
+# Keep model-agnostic: no provider-specific fields (cache_control, etc.).
 # Uses only concrete values in the few-shot example — no {{ }} syntax — so
 # mlflow.register_prompt() won't try to interpolate any variables.
 
@@ -388,7 +381,7 @@ def render_sop_prompt(pipe_id: str) -> str:
     Convenience: run Neo4j traversal then render the user message template.
 
     Returns the fully rendered user message string ready to be passed to any
-    Anthropic or OpenAI-compatible messages API alongside SOP_WALKTHROUGH_SYSTEM_PROMPT.
+    OpenAI-compatible chat completions API alongside SOP_WALKTHROUGH_SYSTEM_PROMPT.
     """
     data = build_sop_chain_data(pipe_id)
     return _user_tmpl.render(**data)

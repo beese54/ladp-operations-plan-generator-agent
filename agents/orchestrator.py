@@ -9,7 +9,7 @@ from langgraph.graph import StateGraph, END, START
 from langgraph.types import Send, interrupt
 from langgraph.checkpoint.memory import MemorySaver
 
-from config.settings import get_settings, get_anthropic_client, get_together_client
+from config.settings import get_settings, get_azure_openai_client, get_together_client
 from schemas.graph_state import OrchestratorState
 from agents.calendar_agent import calendar_agent_node
 from agents.neo4j_agent import neo4j_agent_node
@@ -61,18 +61,19 @@ topics related to water network management, SOPs, and operations planning."
 @mlflow.trace(name="intent_parser", span_type=SpanType.AGENT)
 def intent_parser_node(state: OrchestratorState) -> dict:
     s = get_settings()
-    client = get_anthropic_client()
+    client = get_azure_openai_client()
     user_query = state.get("user_query_raw", "")
 
     try:
-        response = client.messages.create(
-            model=s.anthropic_model,
-            max_tokens=512,
-            system=[{"type": "text", "text": _INTENT_SYSTEM,
-                     "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content": user_query}],
+        response = client.chat.completions.create(
+            model=s.azure_openai_chat_deployment_name,
+            max_completion_tokens=512,
+            messages=[
+                {"role": "system", "content": _INTENT_SYSTEM},
+                {"role": "user", "content": user_query},
+            ],
         )
-        raw = response.content[0].text.strip()
+        raw = response.choices[0].message.content.strip()
         # Strip markdown code fences if the model adds them
         if raw.startswith("```"):
             parts = raw.split("```")
@@ -109,32 +110,22 @@ def general_response_node(state: OrchestratorState) -> dict:
     query_lower = user_query.lower()
     in_scope = any(topic in query_lower for topic in _IN_SCOPE_TOPICS)
 
-    provider = s.agent_providers.get("general_response", "together")
+    provider = s.agent_providers.get("general_response", "azure")
     try:
-        if provider == "anthropic":
-            client = get_anthropic_client()
-            response = client.messages.create(
-                model=s.anthropic_model,
-                max_tokens=1024,
-                system=_GENERAL_SYSTEM,
-                messages=state.get("messages", []) + [{"role": "user", "content": user_query}]
-                if in_scope else
-                [{"role": "user", "content": user_query}],
-            )
-            answer = response.content[0].text
-        else:
-            client = get_together_client()
-            msgs = [{"role": "system", "content": _GENERAL_SYSTEM}]
+        client = get_azure_openai_client() if provider == "azure" else get_together_client()
+        model = s.azure_openai_chat_deployment_name if provider == "azure" else s.together_model
+        msgs = [{"role": "system", "content": _GENERAL_SYSTEM}]
+        if in_scope:
             for m in state.get("messages", [])[-6:]:  # last 3 turns
                 msgs.append({"role": m.get("role", "user"), "content": m.get("content", "")})
-            msgs.append({"role": "user", "content": user_query})
-            response = client.chat.completions.create(
-                model=s.together_model,
-                messages=msgs,
-                max_tokens=1024,
-                temperature=0.3,
-            )
-            answer = response.choices[0].message.content or ""
+        msgs.append({"role": "user", "content": user_query})
+        response = client.chat.completions.create(
+            model=model,
+            messages=msgs,
+            max_completion_tokens=1024,
+            temperature=0.3,
+        )
+        answer = response.choices[0].message.content or ""
     except Exception as e:
         logger.error("General response error: %s", e)
         answer = "I'm sorry, I encountered an error. Please try again."

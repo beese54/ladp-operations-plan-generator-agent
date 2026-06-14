@@ -35,14 +35,14 @@ async def health_check():
     except Exception as e:
         results["sqlite"] = f"ERROR: {e}"
 
-    # Anthropic
+    # Azure OpenAI
     try:
-        from config.settings import get_anthropic_client
-        client = get_anthropic_client()
-        client.models.list(limit=1)
-        results["anthropic"] = "OK"
+        from config.settings import get_azure_openai_client
+        client = get_azure_openai_client()
+        client.models.list()
+        results["azure_openai"] = "OK"
     except Exception as e:
-        results["anthropic"] = f"ERROR: {e}"
+        results["azure_openai"] = f"ERROR: {e}"
 
     overall = "OK" if all(v == "OK" for v in results.values()) else "DEGRADED"
     status_code = 200 if overall == "OK" else 503
@@ -52,7 +52,7 @@ async def health_check():
         neo4j=results["neo4j"],
         chromadb=results["chromadb"],
         sqlite=results["sqlite"],
-        anthropic=results["anthropic"],
+        azure_openai=results["azure_openai"],
         timestamp=datetime.now(timezone.utc).isoformat(),
     )
     return JSONResponse(content=body.model_dump(), status_code=status_code)

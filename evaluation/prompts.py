@@ -59,7 +59,7 @@ def register_all_prompts() -> None:
                 name=name,
                 template=template,
                 commit_message="v1 — initial production prompt",
-                tags={"model": s.anthropic_model},
+                tags={"model": s.azure_openai_chat_deployment_name},
             )
             logger.info("Registered prompt: %s", name)
         except Exception as e:
@@ -109,10 +109,10 @@ def log_model() -> str:
     """
     s = get_settings()
     config = {
-        "version":         "1.0",
-        "anthropic_model": s.anthropic_model,
-        "together_model":  s.together_model,
-        "neo4j_uri":       s.neo4j_uri,
+        "version":            "1.0",
+        "azure_openai_model": s.azure_openai_chat_deployment_name,
+        "together_model":     s.together_model,
+        "neo4j_uri":          s.neo4j_uri,
     }
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -126,7 +126,6 @@ def log_model() -> str:
             artifacts={"agent_config": tmp},
             pip_requirements=[
                 "mlflow>=3.11.0",
-                "anthropic>=0.95.0",
                 "langgraph>=1.1.6",
                 "neo4j>=5.28.1",
                 "chromadb>=1.5.6",

@@ -66,7 +66,7 @@ def run_evaluation(dataset_name: str, prompt_version: int | None = None) -> obje
         mlflow.log_params({
             "dataset":        dataset_name,
             "prompt_version": str(prompt_version or "current"),
-            "model":          s.anthropic_model,
+            "model":          s.azure_openai_chat_deployment_name,
             "row_count":      len(df),
             "scorer_count":   len(scorers),
         })
