@@ -16,6 +16,7 @@ from agents.neo4j_agent import neo4j_agent_node
 from agents.sop_agent import sop_agent_node
 from agents.historical_agent import historical_agent_node
 from agents.ops_plan_generator import ops_plan_generator_node
+from prompts.sop_walkthrough_prompt import format_sop_walkthrough
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +205,18 @@ def orchestrator_response_node(state: OrchestratorState) -> dict:
     verdict = plan.get("feasibility_verdict", "CONDITIONAL")
     verdict_emoji = {"FEASIBLE": "✅", "NOT_FEASIBLE": "❌", "CONDITIONAL": "⚠️"}.get(verdict, "")
 
-    lines = [
+    lines: list[str] = []
+
+    # Lead with the deterministic SOP sequential logic, then the plan sections below.
+    chain = state.get("sop_chain")
+    if chain:
+        try:
+            lines.append(format_sop_walkthrough(chain))
+            lines.append("")
+        except Exception as e:
+            logger.warning("Could not render SOP walkthrough: %s", e)
+
+    lines += [
         f"## Operations Plan — Pipe `{state.get('pipe_id', '')}` | {state.get('target_date', '')}",
         f"\n**Feasibility:** {verdict_emoji} **{verdict}**",
         f"> {plan.get('feasibility_reason', '')}",
@@ -414,6 +426,7 @@ def invoke_graph(user_message: str, session_id: str | None = None) -> dict[str, 
         "sop_context": None,
         "historical_context": None,
         "operations_plan": None,
+        "sop_chain": None,
         "agents_completed": [],
         "error_messages": [],
         "final_response": None,

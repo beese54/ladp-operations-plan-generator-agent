@@ -83,3 +83,25 @@
   reverse re-feed sequence — even when SOP RAG retrieval fails.
 - Pre-existing, out-of-scope: historical_agent RustBindingsAPI bug; SOP RAG
   relative-path error outside server context.
+
+## Phase 11 — Lead chat output with SOP logic + auto-trace graph (2026-06-15)
+Decisions (approved): output = SOP logic first, keep all sections; graph = auto-trace.
+- [x] 11.1 schemas/graph_state.py — add `sop_chain: Optional[dict[str, Any]]` to OrchestratorState
+- [x] 11.2 prompts/sop_walkthrough_prompt.py — deterministic `format_sop_walkthrough(chain)` (SOP-doc numbering: 1-8 trace, 9 alt feed, 10 chain, 11 affected valves, 12 re-feed)
+- [x] 11.3 agents/ops_plan_generator.py — return `"sop_chain": chain` in success path
+- [x] 11.4 agents/orchestrator.py — orchestrator_response_node prepends walkthrough, keeps all sections
+- [x] 11.5 frontend/src/App.jsx — runTrace accepts explicit id; pass onPipeResolved to ChatPanel
+- [x] 11.6 frontend/src/components/ChatPanel.jsx — call onPipeResolved(data.pipe_id) after reply
+
+### Verification
+- [x] Backend: POST /chat pipe_084 (full window) → SOP walkthrough leads (Steps 1-12), all sections follow; FEASIBLE
+- [x] Trace endpoint /api/v1/trace/pipe_084 → 200, chain {pipe_084,086,088 / valves 034-037 / tail 037}
+- [x] Vite HMR recompiled App.jsx + ChatPanel.jsx cleanly (no errors); proxy /api → 8001
+- [~] UI visual screenshot — not captured (no browser automation installed); both wiring ends + endpoint verified by data path
+
+### Review
+- Deterministic renderer format_sop_walkthrough() (no LLM) guarantees the SOP logic always
+  matches the docx exactly; carried generator→response via new state field sop_chain.
+- Chat now leads with the full SOP sequential walkthrough, then keeps all plan sections below.
+- Chat→graph: ChatPanel.onPipeResolved(data.pipe_id) → App.runTrace(id) → same path as the
+  manual Trace button; graph auto-highlights the shutdown chain on any pipe-resolving query.

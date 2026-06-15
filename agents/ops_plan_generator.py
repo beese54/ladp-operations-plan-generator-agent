@@ -315,5 +315,6 @@ def ops_plan_generator_node(state: OrchestratorState) -> dict:
 
     return {
         "operations_plan": plan,
+        "sop_chain": chain,  # carry deterministic chain to the response node for the walkthrough
         "agents_completed": state.get("agents_completed", []) + ["ops_plan_generator"],
     }

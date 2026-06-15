@@ -20,9 +20,11 @@ export default function App() {
       .catch(e => setGraphError(e.message))
   }, [])
 
-  const runTrace = () => {
-    const id = traceInput.trim()
+  const runTrace = (idArg) => {
+    // idArg may be a string (chat-driven) or absent/event (button/Enter) → fall back to the input box
+    const id = (typeof idArg === 'string' ? idArg : traceInput).trim()
     if (!id) return
+    setTraceInput(id)            // reflect the traced pipe in the search box
     setTraceLoading(true)
     setTraceError(null)
     fetch(`/api/v1/trace/${encodeURIComponent(id)}`)
@@ -72,7 +74,7 @@ export default function App() {
           </div>
         </div>
         <div style={styles.chatPane}>
-          <ChatPanel />
+          <ChatPanel onPipeResolved={runTrace} />
         </div>
       </div>
     </div>

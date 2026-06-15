@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 
 const SESSION_ID = `web-${Date.now()}`
 
-export default function ChatPanel() {
+export default function ChatPanel({ onPipeResolved }) {
   const [messages, setMessages] = useState([
     { role: 'assistant', text: 'Ask me about any pipe shutdown, e.g. "Can I shut down pipe_084 on 2026-05-10 from 08:00 to 16:00?"' },
   ])
@@ -29,6 +29,8 @@ export default function ChatPanel() {
       const data = await res.json()
       const reply = data.message ?? 'No response received.'
       setMessages(prev => [...prev, { role: 'assistant', text: reply }])
+      // Auto-trace: highlight the resolved pipe's shutdown chain on the network graph
+      if (data.pipe_id && onPipeResolved) onPipeResolved(data.pipe_id)
     } catch {
       setMessages(prev => [...prev, { role: 'assistant', text: 'Connection error — is the API running?' }])
     } finally {

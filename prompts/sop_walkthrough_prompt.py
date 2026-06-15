@@ -374,6 +374,92 @@ def build_sop_chain_data(pipe_id: str) -> dict[str, Any]:
     }
 
 
+# ── Public: deterministic walkthrough renderer (no LLM) ───────────────────────
+# Turns build_sop_chain_data() output into the step-by-step SOP walkthrough text,
+# numbered to match data/seed/sop_documents/SOP_document.docx:
+#   Steps 1-8 downstream trace, 9 alternate feed, 10 shutdown chain,
+#   11 affected valves, 12 re-feed reversal (or no-alternate-feed branch).
+# Deterministic so the output always matches the SOP exactly — no model variance.
+
+_SEP = "-" * 60
+
+
+def format_sop_walkthrough(chain: dict[str, Any]) -> str:
+    """Render the deterministic SOP chain as a sequential walkthrough block."""
+    pipe_id = chain["pipe_id"]
+    from_v  = chain["from_valve_id"]
+    to_v    = chain["to_valve_id"]
+    road    = chain.get("pipe_road_name", "")
+    status  = chain.get("pipe_status", "unknown")
+    steps   = chain.get("steps", [])
+    tail    = chain.get("tail_valve_id", "")
+    alt     = chain.get("alternate_feed")
+    sp      = chain.get("shutdown_pipes", [])
+    sv      = chain.get("shutdown_valves", [])
+    rev     = chain.get("reverse_checks", [])
+    downstream = chain.get("downstream_valves_with_roads", [])
+
+    L: list[str] = [
+        f"SOP Walkthrough — {pipe_id}",
+        _SEP,
+        f"Origin pipe : {pipe_id}  ({from_v} -> {to_v})",
+        f"Road name   : {road}",
+        f"Pipe status : {status}",
+        "",
+        "-- Steps 1-8: Downstream trace to tail-end valve --",
+    ]
+    for i, s in enumerate(steps, 1):
+        L.append(f"Step {i}  {s['from_valve']}  ->  {s['pipe_id']}  ->  {s['to_valve']}   ({s['status']})")
+    L.append(f"Step {len(steps) + 1}  {tail}  ->  no further open same-road pipe")
+    L.append(f"        *** TAIL-END VALVE: {tail} ***")
+    L.append("")
+
+    L.append("-- Step 9: Alternate feed check --")
+    if alt:
+        L.append(f"  Candidate pipe: {alt['pipe_id']}  from {alt['from_valve_id']}  status: {alt['status']}")
+        L.append(f"  Result: Alternate feed AVAILABLE via {alt['pipe_id']}")
+    else:
+        L.append(f"  No pipes feed into {tail} from outside the shutdown chain.")
+        L.append("  Result: NO alternate feed available.")
+    L.append("")
+
+    L.append("-- Step 10: Sequential shutdown chain --")
+    L.append(f"  Pipes  : {' -> '.join(sp)}")
+    L.append(f"  Valves : {' -> '.join(sv)}")
+    L.append("")
+
+    # Step 11 — affected valves. With an alternate feed the tail-end valve is
+    # independently supplied and therefore spared; without one, all downstream lose supply.
+    affected = [v for v in downstream if v["valve_id"] != tail] if alt else list(downstream)
+    L.append("-- Step 11: Affected valves (consumers lose supply) --")
+    if affected:
+        for v in affected:
+            L.append(f"  {v['valve_id']}  {v['road_name']}")
+    else:
+        L.append("  None.")
+    if alt:
+        L.append(f"  ({tail} spared — supplied by alternate feed {alt['pipe_id']})")
+    L.append("")
+
+    if alt:
+        L.append("-- Step 12: Branch — alternate feed exists → re-feed sequence --")
+        L.append("  Reverse flow, tail-first; per pair OPEN reverse pipe, then CLOSE forward counterpart:")
+        forward = sp[::-1]
+        for i, c in enumerate(rev):
+            fwd = forward[i] if i < len(forward) else "unknown"
+            final = "   ← actual SHUTDOWN" if i == len(rev) - 1 else ""
+            L.append(
+                f"  Pair {i + 1}  open {c['pipe_id']} ({c['from_valve']}->{c['to_valve']}), "
+                f"then close {fwd}{final}"
+            )
+    else:
+        L.append("-- Step 12: No alternate feed — resident notification required --")
+        L.append("  Notify operator: no alternate feed; the affected area loses supply for the shutdown.")
+        L.append("  Deploy water wagon and water bags to the affected roads above.")
+    L.append(_SEP)
+    return "\n".join(L)
+
+
 # ── Public: render user message ───────────────────────────────────────────────
 
 def render_sop_prompt(pipe_id: str) -> str:
