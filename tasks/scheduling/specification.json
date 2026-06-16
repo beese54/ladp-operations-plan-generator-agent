@@ -1,0 +1,94 @@
+{
+  "feature": "Conversational Scheduling Agent + Calendar UI",
+  "version": "1.0.0",
+  "parent_project": "Water Network Operations Plan Generator",
+  "drafted": "2026-06-16",
+  "description": "Adds (a) conversational slot-filling intake for shutdown requests, (b) a deterministic scheduling rules engine enforcing Singapore-holiday blackout, working-day spacing, and no-Friday-start, (c) emergency preemption with auto-proposed rescheduling of displaced planned ops, and (d) a month-view calendar UI in the React webapp.",
+
+  "locked_decisions": {
+    "festive_blackout_scope": "ALL 11 Singapore public holidays (incl. in-lieu Mondays), +/-7 calendar days each",
+    "emergency_displacement": "auto-propose next valid slot for displaced planned ops; user confirms before commit",
+    "emergency_rule_bypass": "emergencies bypass ALL scheduling rules (no-Friday, 3-working-day gap, holiday blackout)",
+    "planned_booking": "feasible planned request is booked into the calendar AFTER explicit user confirmation (not check-only, not silent)"
+  },
+
+  "scheduling_rules": {
+    "R1_holiday_blackout": "No PLANNED op within +/-7 calendar days of any of the 11 SG public holidays (actual or in-lieu date).",
+    "R2_working_day_gap": "ALL PLANNED ops must have >=3 working days clear before the next scheduled operation. Working day = Mon-Fri excluding public holidays.",
+    "R3_no_friday_start": "PLANNED op may not START on a Friday; engine proposes the following Monday.",
+    "E1_emergency_bypass": "EMERGENCY ops ignore R1/R2/R3; schedulable anytime.",
+    "E2_emergency_preempt": "EMERGENCY preempts any overlapping PLANNED op.",
+    "E3_emergency_reschedule": "Each displaced PLANNED op gets an auto-proposed next valid slot (satisfying R1-R3), surfaced for user confirmation, then rebooked."
+  },
+
+  "tech_stack_touched": {
+    "llm": "Azure OpenAI (intent parsing, conversational responses)",
+    "orchestration": "LangGraph (existing singleton graph in agents/orchestrator.py)",
+    "rules_engine": "pure Python stdlib (datetime) - NO LLM, deterministic, unit-tested",
+    "calendar_db": "SQLite (existing data/calendar.db, scheduled_operations table)",
+    "holiday_config": "data/seed/sg_public_holidays.json (editable, MOM-gazetted 2026-2027)",
+    "ui": "React + Vite (existing frontend/) - new month-grid CalendarView, no new npm dependency (custom grid)"
+  },
+
+  "data_schemas": {
+    "sg_public_holidays.json": {
+      "shape": "{ \"YYYY\": [ { \"name\": str, \"date\": \"YYYY-MM-DD\", \"observed\": \"YYYY-MM-DD|null\", \"type\": \"public\" } ] }",
+      "years": ["2026", "2027"],
+      "count_per_year": 11,
+      "note": "observed = in-lieu Monday when holiday falls on Sunday. Editable config; never hardcode in logic."
+    },
+    "scheduled_operations_migration": {
+      "add_column": "operation_class TEXT NOT NULL DEFAULT 'PLANNED'  -- PLANNED | EMERGENCY",
+      "rationale": "operation_type (SHUTDOWN/INSPECTION/...) is orthogonal to planned-vs-emergency; needs its own column.",
+      "existing_columns": ["operation_id","title","operation_type","pipe_id","valve_ids","zone_id","scheduled_start","scheduled_end","priority","status","description","assigned_crew","created_by","updated_at"]
+    }
+  },
+
+  "rules_engine_api": {
+    "module": "tools/scheduling_rules.py",
+    "functions": [
+      "load_holidays(years) -> list[Holiday]",
+      "blackout_dates(years) -> set[date]   # +/-7d around each holiday incl observed",
+      "is_working_day(d: date) -> bool",
+      "working_days_between(d1: date, d2: date) -> int",
+      "validate_planned(start: datetime, end: datetime, existing_ops: list) -> ValidationResult{ok: bool, violations: list[str]}",
+      "next_valid_slot(desired_start: datetime, duration_h: float, existing_ops: list) -> datetime",
+      "find_displaced(emergency_start: datetime, emergency_end: datetime, existing_ops: list) -> list[op]"
+    ]
+  },
+
+  "api_endpoints": [
+    {"method": "GET", "path": "/api/v1/schedule", "change": "EXTEND", "description": "List ops; add ?start=&end= range filter + operation_class in response for calendar month view"},
+    {"method": "POST", "path": "/api/v1/schedule", "change": "REUSE", "description": "Create scheduled operation (planned or emergency)"},
+    {"method": "PATCH", "path": "/api/v1/schedule/{operation_id}", "change": "NEW", "description": "Reschedule a displaced operation to a new confirmed slot"},
+    {"method": "DELETE", "path": "/api/v1/schedule/{operation_id}", "change": "REUSE", "description": "Cancel operation"},
+    {"method": "GET", "path": "/api/v1/holidays", "change": "NEW", "description": "Return SG holidays + blackout dates for a year (calendar shading)"}
+  ],
+
+  "langgraph_changes": {
+    "intent_parser": "extract pipe_id, date(s) (single|range), start_time, end_time, operation_class (PLANNED|EMERGENCY)",
+    "clarification": "slot-aware: ask one missing slot at a time (pipe_id -> dates -> time -> operation_class), conversational tone; may raise max rounds above 2",
+    "schedule_agent": "evolve agents/calendar_agent.py: call rules engine; planned -> violations + next_valid_slot; emergency -> find_displaced + reschedule proposals",
+    "confirmation": "HITL interrupt before any DB write (book planned, book emergency, rebook displaced)"
+  },
+
+  "state_changes": {
+    "schemas/graph_state.py": [
+      "add operation_class: Optional[str]  # PLANNED | EMERGENCY",
+      "add date_range_end: Optional[str]   # for multi-day requests",
+      "extend awaiting_clarification enum: '' | pipe_id | date | time_range | operation_class",
+      "add schedule_proposals: Optional[list[dict]]  # displaced-op reschedule suggestions"
+    ]
+  },
+
+  "ui_changes": {
+    "frontend/src/components/CalendarView.jsx": "NEW month grid; PLANNED vs EMERGENCY colour-coded; festive blackout shaded; click op -> detail popover",
+    "frontend/src/App.jsx": "toggle/tab between network graph and calendar view"
+  },
+
+  "out_of_scope": [
+    "Tank nodes / pipe_001 / pipe_002 restoration (separate task)",
+    "Multi-user concurrent write locking (SQLite single-writer acceptable at this scale)",
+    "Rewriting the stale project-wide specification.json (Anthropic/neo4j+s refs) - tracked separately"
+  ]
+}

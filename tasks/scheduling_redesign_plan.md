@@ -1,0 +1,69 @@
+# Plan — Conversational Scheduling Agent + Calendar UI
+
+Status: **AWAITING APPROVAL** (no production code until approved — gatekeeper clause)
+Date drafted: 2026-06-16
+
+## Decisions locked with user
+1. **Festive blackout = ALL 11 public holidays**, ±7 calendar days around each (including in-lieu Mondays).
+2. **Emergency displacement → auto-propose next valid slot**, user confirms before commit.
+3. **Emergencies bypass ALL scheduling rules** (no-Friday, 3-day gap, holiday blackout). Schedulable anytime.
+4. (Assumption, correctable) A feasible **planned** request is **booked into the calendar after user confirmation** — not silently, not check-only.
+
+## Rule set
+**Intake (conversational slot-filling):** elicit any missing — pipe_id, date(s) (single day or range), start time, end time, and **planned vs emergency**. Ask one slot at a time, naturally.
+
+**PLANNED op rules:**
+- R1 — No op within ±7 calendar days of any of the 11 SG public holidays (incl. in-lieu).
+- R2 — ≥3 working days clear before the next scheduled operation (no back-to-back; officer rest). Working day = Mon–Fri excluding public holidays.
+- R3 — Op may not **start on a Friday** → propose the following Monday.
+
+**EMERGENCY op rules:**
+- E1 — Bypasses R1/R2/R3; can be scheduled anytime.
+- E2 — Preempts any overlapping PLANNED op.
+- E3 — Each displaced PLANNED op gets an auto-proposed next valid slot (satisfying R1–R3), surfaced for user confirmation, then rebooked.
+
+## Architecture (fits existing LangGraph + React app)
+
+### A. Holiday config (data, editable)
+- `data/seed/sg_public_holidays.json` — 2026 + 2027, all 11/yr, actual + in-lieu dates. Source: MOM-gazetted (retrieved 2026-06-16). Marked as updatable config, never hardcoded in logic.
+
+### B. Deterministic rules engine (NEW, pure Python, no LLM, fully unit-tested)
+- `tools/scheduling_rules.py`:
+  - `load_holidays()`, `blackout_dates()` → set of all blocked dates (±7d around each holiday).
+  - `is_working_day(d)`, `working_days_between(d1, d2)`.
+  - `validate_planned(pipe_id, start, end, existing_ops)` → `ValidationResult{ok, violations[]}` (checks R1–R3).
+  - `next_valid_slot(desired_start, duration_hours, existing_ops)` → earliest date satisfying R1–R3.
+  - `find_displaced(emergency_start, emergency_end, existing_ops)` → overlapping PLANNED ops.
+- Rationale: deterministic = testable + never hallucinates a date (same philosophy as the SOP chain).
+
+### C. Schedule agent node (evolve `agents/calendar_agent.py`)
+- For PLANNED: call `validate_planned`; on failure attach violations + `next_valid_slot` suggestion to state.
+- For EMERGENCY: always feasible; call `find_displaced`; compute `next_valid_slot` reschedule proposal per displaced op.
+- Output flows into `ops_plan_generator` / response so the reply explains conflicts + proposals conversationally.
+
+### D. Conversational intake (extend `intent_parser_node` + clarification interrupt)
+- Intent parser extracts: pipe_id, date(s), start_time, end_time, **operation_class (PLANNED|EMERGENCY)**.
+- Slot-aware clarification: extend `awaiting_clarification` enum to include `time_range` + `operation_class`; ask one missing slot at a time. May raise max clarification rounds beyond 2.
+- `schemas/graph_state.py`: add `operation_class: Optional[str]` + `date_range_end` for ranges.
+
+### E. Booking + emergency reschedule (write path, HITL-confirmed)
+- Confirmation interrupt before any DB write.
+- PLANNED feasible + confirm → `create_scheduled_operation(...)`.
+- EMERGENCY confirm → book emergency, then per displaced op show proposed slot → on confirm update that op's dates.
+
+### F. Calendar UI (React)
+- Backend: reuse `GET /api/v1/schedule` (verify response shape); add `GET /api/v1/holidays` for blackout shading.
+- Frontend: `CalendarView.jsx` — month grid; PLANNED vs EMERGENCY colour-coded; festive blackout shaded; click op → detail popover. Toggle/tab beside the existing Cytoscape network graph.
+
+### G. Seed data
+- Seed `scheduled_operations` with sample PLANNED ops across 2026–2027 (incl. the pipe_003/pipe_033 conflicts noted previously) so the calendar + conflict logic are demonstrable.
+
+## Proposed phasing (each phase independently verifiable)
+- **P1** — Holiday config + rules engine + unit tests (no graph wiring). *Verify: pytest.*
+- **P2** — Schedule agent node + state fields; planned validation in chat. *Verify: chat shows violations + suggested slot.*
+- **P3** — Conversational slot-filling intake (incl. planned/emergency). *Verify: missing-info dialog.*
+- **P4** — Booking + emergency preemption/reschedule write path. *Verify: emergency displaces + rebooks.*
+- **P5** — Calendar UI + holidays endpoint + seed data. *Verify: calendar renders in webapp.*
+
+## Open question for approval
+- OK to proceed P1→P5 in order, committing per phase? Or want the full blueprint artifacts (specification.json / definition_of_done.md / progress_tracking.json) regenerated first per your enterprise workflow?

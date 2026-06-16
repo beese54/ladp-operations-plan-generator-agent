@@ -1,0 +1,54 @@
+{
+  "feature": "Conversational Scheduling Agent + Calendar UI",
+  "parent_project": "Water Network Operations Plan Generator",
+  "last_updated": "2026-06-16",
+  "status": "IN_PROGRESS — Phase 1 complete",
+  "phases": [
+    {
+      "phase": 1,
+      "name": "Holiday config + deterministic rules engine",
+      "tasks": [
+        {"id": "S1.1", "name": "data/seed/sg_public_holidays.json (2026-2027)",        "status": "Completed", "depends_on": []},
+        {"id": "S1.2", "name": "tools/scheduling_rules.py (deterministic engine)",      "status": "Completed", "depends_on": ["S1.1"]},
+        {"id": "S1.3", "name": "tests/test_scheduling_rules.py",                        "status": "Completed", "depends_on": ["S1.2"]}
+      ]
+    },
+    {
+      "phase": 2,
+      "name": "Schedule agent node + planned validation",
+      "tasks": [
+        {"id": "S2.1", "name": "scheduled_operations migration (operation_class)",      "status": "Completed", "depends_on": []},
+        {"id": "S2.2", "name": "schemas/graph_state.py new fields",                     "status": "Pending", "depends_on": []},
+        {"id": "S2.3", "name": "evolve agents/calendar_agent.py -> schedule agent",     "status": "Pending", "depends_on": ["S1.2", "S2.1", "S2.2"]}
+      ]
+    },
+    {
+      "phase": 3,
+      "name": "Conversational slot-filling intake",
+      "tasks": [
+        {"id": "S3.1", "name": "intent_parser extracts all slots + operation_class",    "status": "Pending", "depends_on": ["S2.2"]},
+        {"id": "S3.2", "name": "slot-aware conversational clarification",               "status": "Pending", "depends_on": ["S3.1"]}
+      ]
+    },
+    {
+      "phase": 4,
+      "name": "Booking + emergency preemption/reschedule",
+      "tasks": [
+        {"id": "S4.1", "name": "HITL confirmation interrupt before writes",             "status": "Pending", "depends_on": ["S2.3"]},
+        {"id": "S4.2", "name": "planned booking write path",                            "status": "Pending", "depends_on": ["S4.1"]},
+        {"id": "S4.3", "name": "emergency preempt + auto-propose reschedule (PATCH)",    "status": "Pending", "depends_on": ["S4.1", "S1.2"]}
+      ]
+    },
+    {
+      "phase": 5,
+      "name": "Calendar UI + holidays endpoint + seed",
+      "tasks": [
+        {"id": "S5.1", "name": "GET /api/v1/holidays + extend GET /api/v1/schedule",     "status": "Pending", "depends_on": ["S1.1", "S2.1"]},
+        {"id": "S5.2", "name": "frontend CalendarView.jsx + view toggle",               "status": "Pending", "depends_on": ["S5.1"]},
+        {"id": "S5.3", "name": "seed scheduled_operations (2026 samples, 12 ops)",       "status": "Completed", "depends_on": ["S2.1"]}
+      ]
+    }
+  ],
+  "init_sh_impact": "none expected - no new Python deps (stdlib datetime); calendar UI built as custom grid, no new npm dependency",
+  "notes": "Feature-scoped artifacts. Project-wide specification.json is stale (Anthropic/neo4j+s) and intentionally not modified here."
+}

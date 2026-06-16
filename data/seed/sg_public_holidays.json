@@ -1,0 +1,29 @@
+{
+  "_comment": "Singapore gazetted public holidays (MOM). Editable config — never hardcode dates in logic. 'observed' is the in-lieu Monday when the holiday falls on a Sunday (MOM grants in-lieu for Sunday only, not Saturday). Source retrieved 2026-06-16.",
+  "2026": [
+    {"name": "New Year's Day",            "date": "2026-01-01", "observed": null},
+    {"name": "Chinese New Year",          "date": "2026-02-17", "observed": null},
+    {"name": "Chinese New Year (Day 2)",  "date": "2026-02-18", "observed": null},
+    {"name": "Hari Raya Aidilfitri",      "date": "2026-03-21", "observed": null},
+    {"name": "Good Friday",               "date": "2026-04-03", "observed": null},
+    {"name": "Labour Day",                "date": "2026-05-01", "observed": null},
+    {"name": "Hari Raya Aidiladha",       "date": "2026-05-27", "observed": null},
+    {"name": "Vesak Day",                 "date": "2026-05-31", "observed": "2026-06-01"},
+    {"name": "National Day",              "date": "2026-08-09", "observed": "2026-08-10"},
+    {"name": "Deepavali",                 "date": "2026-11-08", "observed": "2026-11-09"},
+    {"name": "Christmas Day",             "date": "2026-12-25", "observed": null}
+  ],
+  "2027": [
+    {"name": "New Year's Day",            "date": "2027-01-01", "observed": null},
+    {"name": "Chinese New Year",          "date": "2027-02-06", "observed": null},
+    {"name": "Chinese New Year (Day 2)",  "date": "2027-02-07", "observed": "2027-02-08"},
+    {"name": "Hari Raya Aidilfitri",      "date": "2027-03-09", "observed": null},
+    {"name": "Good Friday",               "date": "2027-03-26", "observed": null},
+    {"name": "Labour Day",                "date": "2027-05-01", "observed": null},
+    {"name": "Hari Raya Aidiladha",       "date": "2027-05-16", "observed": "2027-05-17"},
+    {"name": "Vesak Day",                 "date": "2027-05-20", "observed": null},
+    {"name": "National Day",              "date": "2027-08-09", "observed": null},
+    {"name": "Deepavali",                 "date": "2027-10-28", "observed": null},
+    {"name": "Christmas Day",             "date": "2027-12-25", "observed": null}
+  ]
+}

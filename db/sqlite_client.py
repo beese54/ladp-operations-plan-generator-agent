@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS scheduled_operations (
     actual_end      TEXT,
     status          TEXT NOT NULL DEFAULT 'PLANNED',
     priority        TEXT NOT NULL DEFAULT 'NORMAL',
+    operation_class TEXT NOT NULL DEFAULT 'PLANNED',  -- PLANNED | EMERGENCY
     description     TEXT,
     assigned_crew   TEXT,
     created_by      TEXT NOT NULL DEFAULT 'system',
@@ -87,12 +88,31 @@ def get_sqlite_connection(db_path: str | None = None):
         conn.close()
 
 
+# Idempotent column additions for databases created before a column existed.
+# (SQLite has no "ADD COLUMN IF NOT EXISTS", so we check PRAGMA table_info.)
+_MIGRATIONS = {
+    "scheduled_operations": {
+        "operation_class": "ALTER TABLE scheduled_operations "
+                           "ADD COLUMN operation_class TEXT NOT NULL DEFAULT 'PLANNED'",
+    },
+}
+
+
+def _apply_migrations(conn: sqlite3.Connection) -> None:
+    for table, columns in _MIGRATIONS.items():
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for col, ddl in columns.items():
+            if col not in existing:
+                conn.execute(ddl)
+
+
 def bootstrap_sqlite_schema(db_path: str | None = None) -> None:
     path = db_path or get_db_path()
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     try:
         conn.executescript(_DDL)
+        _apply_migrations(conn)
         conn.commit()
     finally:
         conn.close()
