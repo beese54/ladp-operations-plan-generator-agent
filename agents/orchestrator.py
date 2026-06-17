@@ -35,8 +35,7 @@ Return ONLY a JSON object:
   "operation_type": "SHUTDOWN" | "INSPECTION" | "MAINTENANCE" | "GENERAL_QUERY" | "UNKNOWN",
   "pipe_id": "<pipe ID string or null>",
   "target_date": "<ISO date YYYY-MM-DD or null>",
-  "scheduled_start": "<ISO datetime YYYY-MM-DDTHH:MM:SS or null>",
-  "scheduled_end": "<ISO datetime YYYY-MM-DDTHH:MM:SS or null>",
+  "operation_class": "PLANNED" | "EMERGENCY" | null,
   "confidence": 0.0
 }
 Rules:
@@ -44,8 +43,13 @@ Rules:
 - GENERAL_QUERY: user is asking a question about the network, SOPs, schedules, or system without requesting a new operation.
 - UNKNOWN: message is off-topic or ambiguous.
 - Extract pipe_id exactly as stated (e.g. "pipe_151", "P-001").
-- If time is given (e.g. "08:00 to 16:00"), populate scheduled_start and scheduled_end combining with target_date.
-- If only date given, set scheduled_start and scheduled_end to null.
+- target_date is the requested START date of the operation. The system computes the
+  end date itself from the operation's effort, so do NOT extract any time of day or
+  end date.
+- operation_class: "EMERGENCY" if the user signals urgency (emergency, urgent, burst,
+  leak, main break, pipe failure); "PLANNED" if they say planned/scheduled/routine;
+  otherwise null.
+- Resolve relative dates (today, tomorrow, next Monday) against the current date below.
 Return ONLY the JSON object."""
 
 _GENERAL_SYSTEM = """You are a water network operations assistant.
@@ -65,13 +69,14 @@ def intent_parser_node(state: OrchestratorState) -> dict:
     s = get_settings()
     client = get_azure_openai_client()
     user_query = state.get("user_query_raw", "")
+    system_content = f"{_INTENT_SYSTEM}\n\nCurrent date: {datetime.now().date().isoformat()}"
 
     try:
         response = client.chat.completions.create(
             model=s.azure_openai_chat_deployment_name,
             max_completion_tokens=512,
             messages=[
-                {"role": "system", "content": _INTENT_SYSTEM},
+                {"role": "system", "content": system_content},
                 {"role": "user", "content": user_query},
             ],
         )
@@ -88,11 +93,16 @@ def intent_parser_node(state: OrchestratorState) -> dict:
         logger.error("Intent parser error: %s", e)
         parsed = {"operation_type": "UNKNOWN", "confidence": 0.0}
 
+    # Preserve a class already supplied in an earlier turn so re-parsing a
+    # clarification answer never drops it.
+    op_class = parsed.get("operation_class") or state.get("operation_class")
+    if isinstance(op_class, str):
+        op_class = op_class.upper()
+
     return {
-        "pipe_id": parsed.get("pipe_id"),
-        "target_date": parsed.get("target_date"),
-        "scheduled_start": parsed.get("scheduled_start"),
-        "scheduled_end": parsed.get("scheduled_end"),
+        "pipe_id": parsed.get("pipe_id") or state.get("pipe_id"),
+        "target_date": parsed.get("target_date") or state.get("target_date"),
+        "operation_class": op_class,
         "operation_type": parsed.get("operation_type", "UNKNOWN"),
         "intent_confidence": float(parsed.get("confidence", 0.0)),
         "agents_completed": [],
@@ -138,10 +148,14 @@ def general_response_node(state: OrchestratorState) -> dict:
     }
 
 
+# Up to 3 slots (pipe, start date, planned/emergency) may each need a turn.
+MAX_CLARIFICATION_ROUNDS = 4
+
+
 # ─── Helper: merge a clarification answer back into the running query ────────
 def _merge_clarification(state: OrchestratorState, user_response: Any) -> str:
     """Append the user's clarification answer to the prior query so the intent
-    parser re-parses the *full* context (pipe + date + time), not just the
+    parser re-parses the *full* context (pipe + start date + class), not just the
     fragment. Replacing user_query_raw outright would drop slots already known."""
     answer = user_response if isinstance(user_response, str) else str(user_response)
     prior = (state.get("user_query_raw") or "").strip()
@@ -150,61 +164,38 @@ def _merge_clarification(state: OrchestratorState, user_response: Any) -> str:
     return f"{prior}. {answer}"
 
 
-# ─── Node: Clarification (missing pipe_id or date) ───────────────────────────
+# ─── Node: Clarification (slot-aware, one missing slot at a time) ────────────
 @mlflow.trace(name="clarification", span_type=SpanType.AGENT)
 def clarification_node(state: OrchestratorState) -> dict:
     round_num = state.get("clarification_round", 0)
-    if round_num >= 2:
+    if round_num >= MAX_CLARIFICATION_ROUNDS:
         return {
             "final_response": (
-                "To generate an operations plan I need: the **pipe ID** (e.g. `pipe_151`) "
-                "and the **scheduled date and time window** (e.g. `2026-06-01 08:00 to 16:00`). "
-                "Please provide these details."
+                "To plan an operation I need three things: the **pipe ID** "
+                "(e.g. `pipe_151`), the **start date** (e.g. `2026-07-06`), and "
+                "whether it is a **planned** operation or an **emergency**. "
+                "Please provide these and try again."
             ),
             "agents_completed": ["clarification_maxed"],
         }
 
-    missing = []
+    # Ask for the first missing slot in priority order.
     if not state.get("pipe_id"):
-        missing.append("the **pipe ID** (e.g. `pipe_151`)")
-    if not state.get("target_date"):
-        missing.append("the **date** for the operation (e.g. `2026-06-01`)")
-
-    question = f"To proceed, could you please provide {' and '.join(missing)}?"
-
-    user_response = interrupt({"clarification_question": question})
-
-    return {
-        "user_query_raw": _merge_clarification(state, user_response),
-        "clarification_round": round_num + 1,
-    }
-
-
-# ─── Node: Time Clarification (date given, no time) ──────────────────────────
-@mlflow.trace(name="time_clarification", span_type=SpanType.AGENT)
-def time_clarification_node(state: OrchestratorState) -> dict:
-    round_num = state.get("clarification_round", 0)
-    date = state.get("target_date", "the requested date")
-
-    if round_num >= 2:
-        return {
-            "final_response": (
-                f"I need the start and end time for the operation on {date}. "
-                "For example: `08:00 to 16:00`. Please re-submit with the time included."
-            ),
-            "agents_completed": ["clarification_maxed"],
-        }
-
-    question = (
-        f"What start and end time do you require for the operation on **{date}**? "
-        f"(e.g. `08:00 to 16:00`)"
-    )
+        slot = "pipe_id"
+        question = "Which pipe is this operation on? (e.g. `pipe_151`)"
+    elif not state.get("target_date"):
+        slot = "date"
+        question = "What date should the operation start? (e.g. `2026-07-06`)"
+    else:  # operation_class missing
+        slot = "operation_class"
+        question = "Is this a **planned** operation or an **emergency**?"
 
     user_response = interrupt({"clarification_question": question})
 
     return {
         "user_query_raw": _merge_clarification(state, user_response),
         "clarification_round": round_num + 1,
+        "awaiting_clarification": slot,
     }
 
 
@@ -279,8 +270,13 @@ def orchestrator_response_node(state: OrchestratorState) -> dict:
         except Exception as e:
             logger.warning("Could not render SOP walkthrough: %s", e)
 
+    # System-computed window (start date + working-day layout); falls back to the
+    # requested start date if the calendar agent did not run.
+    cs, ce = state.get("scheduled_start"), state.get("scheduled_end")
+    window = f"{_fmt_dt(cs)} → {_fmt_dt(ce)}" if cs and ce else (state.get("target_date") or "")
+
     lines += [
-        f"## Operations Plan — Pipe `{state.get('pipe_id', '')}` | {state.get('target_date', '')}",
+        f"## Operations Plan — Pipe `{state.get('pipe_id', '')}` | {window}",
         f"\n**Feasibility:** {verdict_emoji} **{verdict}**",
         f"> {plan.get('feasibility_reason', '')}",
         "",
@@ -329,8 +325,13 @@ def orchestrator_response_node(state: OrchestratorState) -> dict:
             lines.append(f"{i}. {s}")
         lines.append("")
 
-    if plan.get("estimated_duration_hours"):
-        lines.append(f"**Estimated Duration:** {plan['estimated_duration_hours']} hours")
+    # Prefer the deterministic duration/span computed by the calendar agent.
+    cal = state.get("calendar_context") or {}
+    duration = cal.get("estimated_duration_hours") or plan.get("estimated_duration_hours")
+    if duration:
+        wd = cal.get("working_days_count")
+        span = f" across {wd} working day(s)" if wd else ""
+        lines.append(f"**Estimated Duration:** {float(duration):.1f} hours{span}")
 
     if plan.get("alternative_recommendation"):
         lines.append(f"\n**Alternative Recommendation:** {plan['alternative_recommendation']}")
@@ -350,28 +351,19 @@ def error_handler_node(state: OrchestratorState) -> dict:
 
 
 # ─── Routing Functions ────────────────────────────────────────────────────────
-def route_after_intent(state: OrchestratorState) -> list | str:
+def route_after_intent(state: OrchestratorState) -> str:
     op_type = state.get("operation_type", "UNKNOWN")
-    pipe_id = state.get("pipe_id")
-    target_date = state.get("target_date")
-    scheduled_start = state.get("scheduled_start")
-    scheduled_end = state.get("scheduled_end")
 
     if op_type in ("GENERAL_QUERY", "UNKNOWN"):
         return "general_response"
 
-    # OPS query — check completeness
-    if not pipe_id or not target_date:
+    # OPS query — require pipe, start date, and planned/emergency before proceeding.
+    if not state.get("pipe_id") or not state.get("target_date") or not state.get("operation_class"):
         return "clarification"
 
-    if not scheduled_start or not scheduled_end:
-        return "time_clarification"
-
-    # Complete — fan out calendar + neo4j in parallel
-    return [
-        Send("calendar_agent", state),
-        Send("neo4j_agent", state),
-    ]
+    # Complete — Neo4j first; it produces the topology + shutdown chain the
+    # calendar agent needs to size the operation's working-day window.
+    return "neo4j_agent"
 
 
 def route_after_clarification(state: OrchestratorState) -> str:
@@ -383,7 +375,10 @@ def route_after_clarification(state: OrchestratorState) -> str:
 def route_after_neo4j(state: OrchestratorState) -> list | str:
     if state.get("topology_context") is None:
         return "error_handler"
+    # Calendar joins the fan-out here (not in parallel with neo4j) because it
+    # sizes the window from the shutdown chain neo4j just produced.
     return [
+        Send("calendar_agent", state),
         Send("sop_agent", state),
         Send("historical_agent", state),
     ]
@@ -402,7 +397,6 @@ def build_orchestrator_graph():
     graph.add_node("intent_parser",         intent_parser_node)
     graph.add_node("general_response",      general_response_node)
     graph.add_node("clarification",         clarification_node)
-    graph.add_node("time_clarification",    time_clarification_node)
     graph.add_node("calendar_agent",        calendar_agent_node)
     graph.add_node("neo4j_agent",           neo4j_agent_node)
     graph.add_node("sop_agent",             sop_agent_node)
@@ -416,8 +410,7 @@ def build_orchestrator_graph():
     graph.add_conditional_edges(
         "intent_parser",
         route_after_intent,
-        ["general_response", "clarification", "time_clarification",
-         "calendar_agent", "neo4j_agent"],
+        ["general_response", "clarification", "neo4j_agent"],
     )
 
     # Clarification loops back to intent parser to re-parse the updated query
@@ -426,17 +419,12 @@ def build_orchestrator_graph():
         route_after_clarification,
         ["intent_parser", END],
     )
-    graph.add_conditional_edges(
-        "time_clarification",
-        route_after_clarification,
-        ["intent_parser", END],
-    )
 
-    # After neo4j, fan out sop + historical
+    # After neo4j, fan out calendar + sop + historical
     graph.add_conditional_edges(
         "neo4j_agent",
         route_after_neo4j,
-        ["sop_agent", "historical_agent", "error_handler"],
+        ["calendar_agent", "sop_agent", "historical_agent", "error_handler"],
     )
 
     # All three converge at ops_plan_generator

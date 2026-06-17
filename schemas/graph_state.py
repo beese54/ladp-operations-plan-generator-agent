@@ -34,6 +34,8 @@ class CalendarContext(TypedDict):
     rule_violations: list[str]      # R1/R2/R3 messages (deterministic, planned only)
     suggested_start: Optional[str]  # next valid slot (ISO) when not feasible
     displaced_ops: list[dict[str, Any]]  # planned ops an emergency would displace
+    estimated_duration_hours: float      # effort sized from the valve chain
+    working_days_count: int              # working days the window spans
 
 
 class TopologyContext(TypedDict):
@@ -82,12 +84,12 @@ class OrchestratorState(TypedDict):
     scheduled_end: Optional[str]         # ISO datetime "YYYY-MM-DDTHH:MM:SS"
     operation_type: str                  # SHUTDOWN | INSPECTION | MAINTENANCE | GENERAL_QUERY | UNKNOWN
     operation_class: Optional[str]       # PLANNED | EMERGENCY
-    date_range_end: Optional[str]        # ISO date "YYYY-MM-DD" for multi-day/range requests
+    date_range_end: Optional[str]        # ISO date "YYYY-MM-DD" — system-computed end date
     intent_confidence: float
 
     # Clarification tracking
-    clarification_round: int             # max 2 before hard stop
-    awaiting_clarification: str          # "" | "pipe_id" | "date" | "time_range" | "operation_class"
+    clarification_round: int             # max MAX_CLARIFICATION_ROUNDS before hard stop
+    awaiting_clarification: str          # "" | "pipe_id" | "date" | "operation_class"
 
     # Scheduling proposals (emergency displaces planned -> suggested new slots)
     schedule_proposals: Optional[list[dict[str, Any]]]

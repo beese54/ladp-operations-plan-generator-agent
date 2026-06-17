@@ -7,6 +7,7 @@ from tools.neo4j_tools import (
     get_downstream_pipes,
     check_alternative_path,
 )
+from prompts.sop_walkthrough_prompt import build_sop_chain_data
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,17 @@ def neo4j_agent_node(state: OrchestratorState) -> dict:
         neighborhood_pipes=unique_neighborhood,
     )
 
+    # Build the deterministic shutdown chain once here so both the calendar agent
+    # (sizes the operation from the valve count) and the ops plan generator can
+    # reuse it instead of re-traversing Neo4j.
+    try:
+        sop_chain = build_sop_chain_data(pipe_id)
+    except Exception as e:
+        logger.warning("Could not build SOP chain for %s: %s", pipe_id, e)
+        sop_chain = None
+
     return {
         "topology_context": context,
+        "sop_chain": sop_chain,
         "agents_completed": state.get("agents_completed", []) + ["neo4j"],
     }

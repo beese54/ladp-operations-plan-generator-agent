@@ -79,9 +79,23 @@ Date drafted: 2026-06-16
 - `tests/test_schedule_agent.py` — 5 tests (PLANNED R3/R1/clean + EMERGENCY displace/no-overlap). All green; full scheduling suite 23 passed.
 - Live check ✅: planned Fri 2026-06-19 shutdown returns 🗓️ section with R3 + R2 violations and suggested next valid start 2026-07-01.
 
-**NEXT STEP (Phase 3):** S3.1 intent parser extracts pipe_id/dates/time/operation_class (PLANNED|EMERGENCY); S3.2 slot-aware conversational clarification (extend awaiting_clarification to time_range + operation_class; ask one slot at a time). Note: until S3.1 lands, the EMERGENCY path is only reachable by injecting operation_class into state — chat defaults everything to PLANNED.
+**Phase 3 REDESIGNED + COMPLETE + verified (2026-06-17).** User changed the model mid-phase:
+- Intake asks only **pipe + planned/emergency + START date** — one natural question at a time. No time-of-day input.
+- Fixed daily window **10:00–16:00**; the system **computes the end date** by laying the operation's effort across working days (skip weekends + holidays), spilling past 16:00 to the next working day.
+- Effort **duration = valve_count × 45min + 1h setup**, valve_count from the shutdown chain (`build_sop_chain_data → shutdown_valves`).
 
-**Servers:** backend :8001 + frontend :5174 were left running in the background earlier; may need a restart on resume.
+S3.1–S3.5 shipped (commits 95113a2 = layout engine + tests; <this commit> = intake + graph reorder + calendar wiring):
+- `tools/scheduling_rules.py` — `estimate_duration_hours`, `layout_working_window`, `next_valid_layout_start` + constants. 25 rules tests.
+- `agents/orchestrator.py` — intent parser extracts pipe/start-date/operation_class (+ injects today); single slot-aware `clarification_node` (pipe → date → class), `MAX_CLARIFICATION_ROUNDS=4`; removed `time_clarification`; **graph reorder: intent → neo4j → [calendar, sop, historical]**; response shows computed window + duration.
+- `agents/neo4j_agent.py` — builds `sop_chain` once (reused by calendar + ops_plan_generator).
+- `agents/calendar_agent.py` — sizes op from valve count, lays out window, sets scheduled_start/end + date_range_end, validates / proposes.
+- `schemas/graph_state.py` — CalendarContext +estimated_duration_hours/working_days_count; comment updates.
+- `tests/test_schedule_agent.py` — rewritten for the new model. Full suite 31 passed.
+- Verified live (direct + HTTP): one-shot, 3-turn slot-filling, Friday R3 + suggestion, emergency. pipe_084 = 4 valves → 4h → single-day window.
+
+**NEXT STEP (Phase 4 — booking write path):** S4.1 HITL confirmation interrupt before any DB write; S4.2 persist the computed (multi-day) window via `create_scheduled_operation`; S4.3 emergency preempt + rebook displaced ops (the reschedule proposals are already computed in calendar_agent). Pre-existing note: SOP retrieval logs `'RustBindingsAPI' object has no attribute 'bindings'` (ChromaDB), degrades gracefully — unrelated to scheduling.
+
+**Servers:** backend :8001 + frontend :5174 run in the background; restart on resume.
 
 ## Open question for approval
 - OK to proceed P1→P5 in order, committing per phase? Or want the full blueprint artifacts (specification.json / definition_of_done.md / progress_tracking.json) regenerated first per your enterprise workflow?

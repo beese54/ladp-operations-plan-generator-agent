@@ -2,7 +2,7 @@
   "feature": "Conversational Scheduling Agent + Calendar UI",
   "parent_project": "Water Network Operations Plan Generator",
   "last_updated": "2026-06-17",
-  "status": "IN_PROGRESS — Phase 1 done; Phase 2 done (S2.1-S2.4 verified); next: Phase 3 intake",
+  "status": "IN_PROGRESS — Phases 1-3 done + verified; next: Phase 4 booking write path",
   "phases": [
     {
       "phase": 1,
@@ -25,10 +25,13 @@
     },
     {
       "phase": 3,
-      "name": "Conversational slot-filling intake",
+      "name": "Conversational intake + auto-scheduled window",
       "tasks": [
-        {"id": "S3.1", "name": "intent_parser extracts all slots + operation_class",    "status": "Pending", "depends_on": ["S2.2"]},
-        {"id": "S3.2", "name": "slot-aware conversational clarification",               "status": "Pending", "depends_on": ["S3.1"]}
+        {"id": "S3.1", "name": "intent_parser: pipe + start date + operation_class (no time)", "status": "Completed", "depends_on": ["S2.2"]},
+        {"id": "S3.2", "name": "slot-aware clarification (one slot at a time)",          "status": "Completed", "depends_on": ["S3.1"]},
+        {"id": "S3.3", "name": "duration + working-day layout engine (scheduling_rules)", "status": "Completed", "depends_on": ["S1.2"]},
+        {"id": "S3.4", "name": "calendar agent computes window from valve count; graph reorder", "status": "Completed", "depends_on": ["S3.3", "S2.3"]},
+        {"id": "S3.5", "name": "response shows computed window + deterministic duration", "status": "Completed", "depends_on": ["S3.4"]}
       ]
     },
     {

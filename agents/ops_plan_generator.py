@@ -234,9 +234,10 @@ def ops_plan_generator_node(state: OrchestratorState) -> dict:
 
     # Deterministic SOP chain (ground truth from Neo4j traversal). Supplies the
     # valve adjacency, affected valves, and re-feed open/close pairs the flat
-    # topology lacks. Degrade gracefully to topology-only if it cannot be built.
-    chain = None
-    if pipe_id:
+    # topology lacks. The neo4j agent builds it upstream so we reuse it here;
+    # fall back to building it if absent (e.g. older checkpointed state).
+    chain = state.get("sop_chain")
+    if chain is None and pipe_id:
         try:
             chain = build_sop_chain_data(pipe_id)
         except Exception as e:
