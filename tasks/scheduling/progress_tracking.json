@@ -1,8 +1,8 @@
 {
   "feature": "Conversational Scheduling Agent + Calendar UI",
   "parent_project": "Water Network Operations Plan Generator",
-  "last_updated": "2026-06-16",
-  "status": "IN_PROGRESS — Phase 1 complete",
+  "last_updated": "2026-06-17",
+  "status": "IN_PROGRESS — Phase 1 done; Phase 2 done (S2.1-S2.4 verified); next: Phase 3 intake",
   "phases": [
     {
       "phase": 1,
@@ -18,8 +18,9 @@
       "name": "Schedule agent node + planned validation",
       "tasks": [
         {"id": "S2.1", "name": "scheduled_operations migration (operation_class)",      "status": "Completed", "depends_on": []},
-        {"id": "S2.2", "name": "schemas/graph_state.py new fields",                     "status": "Pending", "depends_on": []},
-        {"id": "S2.3", "name": "evolve agents/calendar_agent.py -> schedule agent",     "status": "Pending", "depends_on": ["S1.2", "S2.1", "S2.2"]}
+        {"id": "S2.2", "name": "schemas/graph_state.py new fields",                     "status": "Completed", "depends_on": []},
+        {"id": "S2.3", "name": "evolve agents/calendar_agent.py -> schedule agent",     "status": "Completed", "depends_on": ["S1.2", "S2.1", "S2.2"]},
+        {"id": "S2.4", "name": "tests/test_schedule_agent.py (PLANNED + EMERGENCY)",     "status": "Completed", "depends_on": ["S2.3"]}
       ]
     },
     {

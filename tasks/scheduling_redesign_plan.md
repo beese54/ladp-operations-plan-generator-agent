@@ -65,5 +65,23 @@ Date drafted: 2026-06-16
 - **P4** — Booking + emergency preemption/reschedule write path. *Verify: emergency displaces + rebooks.*
 - **P5** — Calendar UI + holidays endpoint + seed data. *Verify: calendar renders in webapp.*
 
+## RESUME HERE (paused 2026-06-17)
+
+**Committed:** Phase 1 (commit dad9189) + network restore tool (e8f4907). Both on `main`, NOT pushed.
+
+**Done since:** S2.1 (operation_class migration, applied to live calendar.db), S5.3 (12 planned 2026 ops loaded, created_by='seed'), S2.2 (state fields), S2.3 (schedule agent), S2.4 (schedule-agent tests). **Phase 2 complete + verified + committed.**
+
+**S2.2–S2.4 VERIFIED (2026-06-17):**
+- `schemas/graph_state.py` — CalendarContext gained operation_class/rule_violations/suggested_start/displaced_ops; OrchestratorState gained operation_class, date_range_end, schedule_proposals; awaiting_clarification doc extended.
+- `tools/calendar_tools.py` — new `get_active_operations()`.
+- `agents/calendar_agent.py` — rewritten as schedule agent: PLANNED → validate_planned + next_valid_slot suggestion; EMERGENCY → find_displaced + reschedule proposals. No LLM.
+- `agents/orchestrator.py` — `_fmt_dt` + `_format_scheduling_section` helpers; response node renders a 🗓️/🚨 scheduling section; initial_state seeds the 3 new fields.
+- `tests/test_schedule_agent.py` — 5 tests (PLANNED R3/R1/clean + EMERGENCY displace/no-overlap). All green; full scheduling suite 23 passed.
+- Live check ✅: planned Fri 2026-06-19 shutdown returns 🗓️ section with R3 + R2 violations and suggested next valid start 2026-07-01.
+
+**NEXT STEP (Phase 3):** S3.1 intent parser extracts pipe_id/dates/time/operation_class (PLANNED|EMERGENCY); S3.2 slot-aware conversational clarification (extend awaiting_clarification to time_range + operation_class; ask one slot at a time). Note: until S3.1 lands, the EMERGENCY path is only reachable by injecting operation_class into state — chat defaults everything to PLANNED.
+
+**Servers:** backend :8001 + frontend :5174 were left running in the background earlier; may need a restart on resume.
+
 ## Open question for approval
 - OK to proceed P1→P5 in order, committing per phase? Or want the full blueprint artifacts (specification.json / definition_of_done.md / progress_tracking.json) regenerated first per your enterprise workflow?

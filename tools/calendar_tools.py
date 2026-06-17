@@ -64,6 +64,25 @@ def get_upcoming_operations(
         return [dict(r) for r in conn.execute(base_query, params)]
 
 
+def get_active_operations(
+    db_path: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Return all PLANNED/IN_PROGRESS operations (any pipe) for rule evaluation.
+
+    The working-day-gap rule (R2) and emergency displacement span all operations,
+    not just the same pipe, so this returns the whole active set.
+    """
+    query = """
+    SELECT operation_id, title, operation_type, operation_class, pipe_id,
+           scheduled_start, scheduled_end, status
+    FROM scheduled_operations
+    WHERE status IN ('PLANNED', 'IN_PROGRESS')
+    ORDER BY scheduled_start ASC
+    """
+    with get_sqlite_connection(db_path) as conn:
+        return [dict(r) for r in conn.execute(query)]
+
+
 def create_scheduled_operation(
     title: str,
     operation_type: str,

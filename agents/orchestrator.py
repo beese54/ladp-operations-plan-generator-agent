@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -208,6 +209,56 @@ def time_clarification_node(state: OrchestratorState) -> dict:
 
 
 # ─── Node: Orchestrator Response ──────────────────────────────────────────────
+def _fmt_dt(iso: str) -> str:
+    """'2026-06-19T08:00:00' -> '2026-06-19 08:00'."""
+    try:
+        return datetime.fromisoformat(iso).strftime("%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return iso or ""
+
+
+def _format_scheduling_section(state: OrchestratorState) -> list[str]:
+    """Render the deterministic scheduling assessment from calendar_context."""
+    cal = state.get("calendar_context") or {}
+    op_class = (cal.get("operation_class") or "PLANNED").upper()
+    lines: list[str] = []
+
+    if op_class == "EMERGENCY":
+        proposals = state.get("schedule_proposals") or []
+        lines.append("### 🚨 Emergency Scheduling")
+        lines.append("Emergency shutdown — scheduling rules bypassed; this operation takes priority.")
+        if proposals:
+            lines.append("\nThe following planned operations are displaced and need rescheduling:")
+            lines.append("\n| Operation | Pipe | Was | Proposed new slot |")
+            lines.append("|-----------|------|-----|-------------------|")
+            for p in proposals:
+                lines.append(
+                    f"| {p['operation_id']} | `{p.get('pipe_id','')}` | "
+                    f"{_fmt_dt(p['old_start'])} → {_fmt_dt(p['old_end'])} | "
+                    f"**{_fmt_dt(p['proposed_start'])} → {_fmt_dt(p['proposed_end'])}** |"
+                )
+            lines.append("")
+        else:
+            lines.append("No planned operations are displaced by this window.\n")
+        return lines
+
+    # PLANNED
+    violations = cal.get("rule_violations") or []
+    if violations:
+        lines.append("### 🗓️ Scheduling — Rule Violations")
+        for v in violations:
+            lines.append(f"- ❌ {v}")
+        suggested = cal.get("suggested_start")
+        if suggested:
+            lines.append(f"\n**Suggested next valid start:** {_fmt_dt(suggested)}")
+        lines.append("")
+    elif cal.get("is_feasible_date"):
+        lines.append("### 🗓️ Scheduling")
+        lines.append("✅ Requested window satisfies all scheduling rules (holiday "
+                     "blackout, working-day gap, no Friday start).\n")
+    return lines
+
+
 @mlflow.trace(name="orchestrator_response", span_type=SpanType.AGENT)
 def orchestrator_response_node(state: OrchestratorState) -> dict:
     plan = state.get("operations_plan")
@@ -234,6 +285,9 @@ def orchestrator_response_node(state: OrchestratorState) -> dict:
         f"> {plan.get('feasibility_reason', '')}",
         "",
     ]
+
+    # Deterministic scheduling assessment (rules engine output, not the LLM).
+    lines += _format_scheduling_section(state)
 
     if plan.get("safety_warnings"):
         lines.append("### ⚠️ Safety Warnings")
@@ -439,9 +493,12 @@ def invoke_graph(user_message: str, session_id: str | None = None) -> dict[str, 
         "scheduled_start": None,
         "scheduled_end": None,
         "operation_type": "UNKNOWN",
+        "operation_class": None,
+        "date_range_end": None,
         "intent_confidence": 0.0,
         "clarification_round": 0,
         "awaiting_clarification": "",
+        "schedule_proposals": None,
         "calendar_context": None,
         "topology_context": None,
         "sop_context": None,
