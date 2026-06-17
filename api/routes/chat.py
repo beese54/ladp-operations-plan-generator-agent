@@ -35,7 +35,23 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
         )
 
     elapsed_ms = int((time.monotonic() - t0) * 1000)
-    final_response = result.get("final_response") or "I could not process your request. Please try again."
+
+    # The graph may pause on a human-in-the-loop interrupt() to ask for a
+    # missing pipe_id / date / time window. LangGraph surfaces this as an
+    # "__interrupt__" key on the returned state — the clarification question is
+    # the response to show, not an error.
+    awaiting_clarification = False
+    interrupts = result.get("__interrupt__")
+    if interrupts:
+        awaiting_clarification = True
+        payload = getattr(interrupts[0], "value", {}) or {}
+        final_response = payload.get(
+            "clarification_question",
+            "Could you provide a bit more detail so I can continue?",
+        )
+    else:
+        final_response = result.get("final_response") or "I could not process your request. Please try again."
+
     plan = result.get("operations_plan")
     feasibility = plan.get("feasibility_verdict") if plan else None
 
@@ -61,5 +77,6 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
         target_date=result.get("target_date"),
         has_plan=plan is not None,
         operations_plan=dict(plan) if plan else None,
+        awaiting_clarification=awaiting_clarification,
         processing_time_ms=elapsed_ms,
     )

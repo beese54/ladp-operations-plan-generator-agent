@@ -6,7 +6,7 @@ from uuid import uuid4
 import mlflow
 from mlflow.entities import SpanType
 from langgraph.graph import StateGraph, END, START
-from langgraph.types import Send, interrupt
+from langgraph.types import Send, interrupt, Command
 from langgraph.checkpoint.memory import MemorySaver
 
 from config.settings import get_settings, get_azure_openai_client, get_together_client
@@ -137,6 +137,18 @@ def general_response_node(state: OrchestratorState) -> dict:
     }
 
 
+# ─── Helper: merge a clarification answer back into the running query ────────
+def _merge_clarification(state: OrchestratorState, user_response: Any) -> str:
+    """Append the user's clarification answer to the prior query so the intent
+    parser re-parses the *full* context (pipe + date + time), not just the
+    fragment. Replacing user_query_raw outright would drop slots already known."""
+    answer = user_response if isinstance(user_response, str) else str(user_response)
+    prior = (state.get("user_query_raw") or "").strip()
+    if not prior:
+        return answer
+    return f"{prior}. {answer}"
+
+
 # ─── Node: Clarification (missing pipe_id or date) ───────────────────────────
 @mlflow.trace(name="clarification", span_type=SpanType.AGENT)
 def clarification_node(state: OrchestratorState) -> dict:
@@ -162,7 +174,7 @@ def clarification_node(state: OrchestratorState) -> dict:
     user_response = interrupt({"clarification_question": question})
 
     return {
-        "user_query_raw": user_response if isinstance(user_response, str) else str(user_response),
+        "user_query_raw": _merge_clarification(state, user_response),
         "clarification_round": round_num + 1,
     }
 
@@ -190,7 +202,7 @@ def time_clarification_node(state: OrchestratorState) -> dict:
     user_response = interrupt({"clarification_question": question})
 
     return {
-        "user_query_raw": user_response if isinstance(user_response, str) else str(user_response),
+        "user_query_raw": _merge_clarification(state, user_response),
         "clarification_round": round_num + 1,
     }
 
@@ -409,6 +421,15 @@ def invoke_graph(user_message: str, session_id: str | None = None) -> dict[str, 
         session_id = str(uuid4())
 
     graph = get_graph()
+    config = {"configurable": {"thread_id": session_id}}
+
+    # If this thread is paused mid-run on a clarification interrupt, the user's
+    # message is the answer to that question — resume the graph instead of
+    # starting a fresh run (which would discard the pending operation context).
+    snapshot = graph.get_state(config)
+    if snapshot.next:
+        return graph.invoke(Command(resume=user_message), config=config)
+
     initial_state: OrchestratorState = {
         "messages": [],
         "session_id": session_id,
@@ -432,6 +453,5 @@ def invoke_graph(user_message: str, session_id: str | None = None) -> dict[str, 
         "final_response": None,
     }
 
-    config = {"configurable": {"thread_id": session_id}}
     result = graph.invoke(initial_state, config=config)
     return result

@@ -17,6 +17,7 @@ class ChatResponse(BaseModel):
     target_date: Optional[str] = None
     has_plan: bool = False
     operations_plan: Optional[dict[str, Any]] = None
+    awaiting_clarification: bool = False
     processing_time_ms: int = 0
 
 
