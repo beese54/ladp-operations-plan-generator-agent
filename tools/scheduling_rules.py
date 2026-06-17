@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Optional, Union
@@ -31,6 +31,13 @@ BLACKOUT_RADIUS_DAYS = 7
 MIN_WORKING_DAYS_GAP = 3
 FRIDAY = 4  # date.weekday(): Mon=0 .. Sun=6
 ACTIVE_STATUSES = {"PLANNED", "IN_PROGRESS"}
+
+# Operations work a fixed daily window; total effort is derived from the valve
+# chain and laid out across working days (see layout_working_window).
+DAILY_START_HOUR = 10        # operations start at 10:00 each working day
+DAILY_WORK_HOURS = 6.0       # 10:00-16:00
+MINUTES_PER_VALVE = 45.0     # effort to operate + verify one valve
+SETUP_HOURS = 1.0            # fixed per-operation setup/mobilisation
 
 DateLike = Union[str, date, datetime]
 
@@ -293,3 +300,82 @@ def find_displaced(
         if _overlaps(e_start, e_end, o_start, o_end):
             displaced.append(op)
     return displaced
+
+
+# --------------------------------------------------------------------------- #
+# Duration estimation + working-day layout
+# --------------------------------------------------------------------------- #
+def estimate_duration_hours(
+    valve_count: int,
+    minutes_per_valve: float = MINUTES_PER_VALVE,
+    setup_hours: float = SETUP_HOURS,
+) -> float:
+    """Total effort hours for an operation, from the number of valves to operate.
+
+    duration = setup + valve_count * minutes_per_valve. The number of valves comes
+    from the deterministic shutdown chain (build_sop_chain_data -> shutdown_valves).
+    """
+    return setup_hours + max(valve_count, 0) * (minutes_per_valve / 60.0)
+
+
+def layout_working_window(
+    start: DateLike,
+    duration_hours: float,
+    path: Optional[str] = None,
+) -> tuple[datetime, datetime, list[date]]:
+    """Lay an operation's effort out across working days at a fixed daily window.
+
+    Each working day contributes DAILY_WORK_HOURS (10:00-16:00). Effort that does
+    not fit before 16:00 rolls onto the next working day; weekends and public
+    holidays are skipped. The requested start rolls forward to the first working
+    day on/after it, so the window always begins on a working day.
+
+    Returns (start_dt, end_dt, working_days) where start_dt is the first working
+    day at 10:00 and end_dt is the last day at 10:00 + leftover hours (<= 16:00).
+    """
+    d = _to_date(start)
+    while not is_working_day(d, path):
+        d += timedelta(days=1)
+
+    start_dt = datetime.combine(d, time(DAILY_START_HOUR))
+    remaining = max(float(duration_hours), 0.0)
+    working_days: list[date] = []
+    cur = d
+    last_end = start_dt
+
+    while True:
+        if is_working_day(cur, path):
+            working_days.append(cur)
+            day_start = datetime.combine(cur, time(DAILY_START_HOUR))
+            chunk = min(remaining, DAILY_WORK_HOURS)
+            last_end = day_start + timedelta(hours=chunk)
+            remaining -= chunk
+            if remaining <= 1e-9:
+                break
+        cur += timedelta(days=1)
+
+    return start_dt, last_end, working_days
+
+
+def next_valid_layout_start(
+    desired_start: DateLike,
+    duration_hours: float,
+    existing_ops: Optional[Iterable[dict[str, Any]]] = None,
+    path: Optional[str] = None,
+    max_lookahead_days: int = 730,
+) -> date:
+    """Earliest working, non-Friday start date whose laid-out window passes R1-R3.
+
+    The layout-aware analogue of next_valid_slot: it lays the duration out from
+    each candidate start and validates the resulting multi-day window.
+    """
+    d = _to_date(desired_start)
+    for _ in range(max_lookahead_days):
+        if is_working_day(d, path) and d.weekday() != FRIDAY:
+            s_dt, e_dt, _days = layout_working_window(d, duration_hours, path)
+            if validate_planned(s_dt, e_dt, existing_ops, path).ok:
+                return d
+        d += timedelta(days=1)
+    raise ValueError(
+        f"No valid layout start within {max_lookahead_days} days of {desired_start}."
+    )

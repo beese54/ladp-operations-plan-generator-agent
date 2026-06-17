@@ -170,5 +170,57 @@ def test_find_displaced_ignores_other_emergency():
     assert displaced == []
 
 
+# --------------------------------------------------------------------------- #
+# Duration estimation + working-day layout (Phase 3)
+# --------------------------------------------------------------------------- #
+def test_estimate_duration_hours():
+    # setup 1h + 4 valves * 45min
+    assert sr.estimate_duration_hours(4) == pytest.approx(1.0 + 4 * 0.75)
+    assert sr.estimate_duration_hours(0) == pytest.approx(sr.SETUP_HOURS)
+
+
+def test_layout_single_day_fits_in_window():
+    # 2.5h on a Monday -> 10:00..12:30, one working day
+    start_dt, end_dt, days = sr.layout_working_window("2026-06-15", 2.5)
+    assert start_dt == datetime(2026, 6, 15, 10, 0)
+    assert end_dt == datetime(2026, 6, 15, 12, 30)
+    assert days == [date(2026, 6, 15)]
+
+
+def test_layout_multi_day_spill():
+    # 14h from Monday -> 6h Mon, 6h Tue, 2h Wed -> ends Wed 12:00
+    start_dt, end_dt, days = sr.layout_working_window("2026-06-15", 14.0)
+    assert days == [date(2026, 6, 15), date(2026, 6, 16), date(2026, 6, 17)]
+    assert end_dt == datetime(2026, 6, 17, 12, 0)
+
+
+def test_layout_skips_weekend():
+    # 14h from Thursday -> Thu, Fri, then Monday (Sat/Sun skipped)
+    start_dt, end_dt, days = sr.layout_working_window("2026-06-18", 14.0)
+    assert days == [date(2026, 6, 18), date(2026, 6, 19), date(2026, 6, 22)]
+    assert end_dt == datetime(2026, 6, 22, 12, 0)
+
+
+def test_layout_skips_public_holiday():
+    # National Day observed Mon 2026-08-10 is skipped.
+    # 10h from Fri 2026-08-07 -> Fri(6h), skip Sat/Sun + Mon holiday, Tue(4h)
+    start_dt, end_dt, days = sr.layout_working_window("2026-08-07", 10.0)
+    assert days == [date(2026, 8, 7), date(2026, 8, 11)]
+    assert end_dt == datetime(2026, 8, 11, 14, 0)
+
+
+def test_layout_rolls_start_to_working_day():
+    # Saturday start -> rolls to Monday
+    start_dt, _end, days = sr.layout_working_window("2026-06-20", 2.0)
+    assert start_dt == datetime(2026, 6, 22, 10, 0)
+    assert days[0] == date(2026, 6, 22)
+
+
+def test_next_valid_layout_start_skips_friday():
+    # Friday 2026-06-19 start -> next valid working non-Friday start = Mon 06-22
+    d = sr.next_valid_layout_start("2026-06-19", 2.5, [])
+    assert d == date(2026, 6, 22)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
