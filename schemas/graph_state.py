@@ -1,7 +1,6 @@
 import operator
 from typing import Annotated, Any, Optional
 from typing_extensions import TypedDict
-from langgraph.graph.message import add_messages
 
 
 class OpsValveAction(TypedDict):
@@ -73,7 +72,9 @@ class OperationsPlan(TypedDict):
 
 
 class OrchestratorState(TypedDict):
-    messages: Annotated[list, add_messages]
+    # Rolling chat transcript ({"role","content"} dicts), appended per turn so the
+    # LLM nodes have conversational history. operator.add => append, never replace.
+    messages: Annotated[list[dict[str, str]], operator.add]
     session_id: str
     user_query_raw: str
 

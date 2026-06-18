@@ -1,7 +1,9 @@
 import json
 import logging
 import re
+import sqlite3
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -9,7 +11,7 @@ import mlflow
 from mlflow.entities import SpanType
 from langgraph.graph import StateGraph, END, START
 from langgraph.types import Send, interrupt, Command
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 
 from config.settings import get_settings, get_azure_openai_client, get_together_client
 from schemas.graph_state import OrchestratorState
@@ -75,14 +77,18 @@ def intent_parser_node(state: OrchestratorState) -> dict:
     user_query = state.get("user_query_raw", "")
     system_content = f"{_INTENT_SYSTEM}\n\nCurrent date: {datetime.now().date().isoformat()}"
 
+    # Include recent transcript so follow-ups ("make it Monday instead") resolve
+    # against the prior turn's pipe/date/class.
+    msgs = [{"role": "system", "content": system_content}]
+    for m in state.get("messages", [])[-4:]:
+        msgs.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+    msgs.append({"role": "user", "content": user_query})
+
     try:
         response = client.chat.completions.create(
             model=s.azure_openai_chat_deployment_name,
             max_completion_tokens=512,
-            messages=[
-                {"role": "system", "content": system_content},
-                {"role": "user", "content": user_query},
-            ],
+            messages=msgs,
         )
         raw = response.choices[0].message.content.strip()
         # Strip markdown code fences if the model adds them
@@ -464,7 +470,21 @@ def route_after_plan(state: OrchestratorState) -> str:
 
 
 # ─── Graph Builder ────────────────────────────────────────────────────────────
-def build_orchestrator_graph():
+# Durable checkpoint store so session context (slot-filling, pending bookings,
+# transcript) survives a backend restart. Sits alongside calendar.db.
+CHECKPOINT_DB_PATH = "./data/checkpoints.db"
+
+
+def _default_checkpointer() -> SqliteSaver:
+    Path(CHECKPOINT_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(CHECKPOINT_DB_PATH, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL")
+    saver = SqliteSaver(conn)
+    saver.setup()
+    return saver
+
+
+def build_orchestrator_graph(checkpointer=None):
     graph = StateGraph(OrchestratorState)
 
     graph.add_node("intent_parser",         intent_parser_node)
@@ -519,8 +539,7 @@ def build_orchestrator_graph():
     graph.add_edge("general_response",      END)
     graph.add_edge("error_handler",         END)
 
-    checkpointer = MemorySaver()
-    return graph.compile(checkpointer=checkpointer)
+    return graph.compile(checkpointer=checkpointer or _default_checkpointer())
 
 
 # Compiled graph singleton
@@ -544,6 +563,30 @@ def _is_steps_request(message: str) -> bool:
     return any(v in m for v in _STEPS_REQUEST_VERBS) and any(n in m for n in _STEPS_REQUEST_NOUNS)
 
 
+def _assistant_text(result: dict[str, Any]) -> str:
+    """The reply shown to the user this turn — the interrupt question if paused,
+    otherwise the final response."""
+    interrupts = result.get("__interrupt__")
+    if interrupts:
+        try:
+            return interrupts[0].value.get("clarification_question", "") or ""
+        except (AttributeError, IndexError):
+            return ""
+    return result.get("final_response") or ""
+
+
+def _record_turn(graph, config: dict, user_text: str, assistant_text: str) -> None:
+    """Append the user + assistant turn to the session transcript. Uses
+    update_state (HITL-safe — preserves any pending interrupt); never fatal."""
+    try:
+        graph.update_state(config, {"messages": [
+            {"role": "user", "content": user_text or ""},
+            {"role": "assistant", "content": assistant_text or ""},
+        ]})
+    except Exception as e:
+        logger.warning("Could not record conversation turn: %s", e)
+
+
 def invoke_graph(user_message: str, session_id: str | None = None) -> dict[str, Any]:
     """Invoke the orchestrator graph and return the final state."""
     if not session_id:
@@ -563,13 +606,16 @@ def invoke_graph(user_message: str, session_id: str | None = None) -> dict[str, 
         else:
             text = ("I don't have an isolation procedure stored yet — ask me about a "
                     "pipe shutdown first, then I can walk you through the steps.")
+        _record_turn(graph, config, user_message, text)
         return {"final_response": text, "pipe_id": (snapshot.values or {}).get("pipe_id")}
 
     # If this thread is paused mid-run on a clarification interrupt, the user's
     # message is the answer to that question — resume the graph instead of
     # starting a fresh run (which would discard the pending operation context).
     if snapshot.next:
-        return graph.invoke(Command(resume=user_message), config=config)
+        result = graph.invoke(Command(resume=user_message), config=config)
+        _record_turn(graph, config, user_message, _assistant_text(result))
+        return result
 
     initial_state: OrchestratorState = {
         "messages": [],
@@ -599,4 +645,5 @@ def invoke_graph(user_message: str, session_id: str | None = None) -> dict[str, 
     }
 
     result = graph.invoke(initial_state, config=config)
+    _record_turn(graph, config, user_message, _assistant_text(result))
     return result

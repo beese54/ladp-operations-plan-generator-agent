@@ -1,5 +1,6 @@
 langgraph==1.1.6
-langgraph-checkpoint==4.0.1
+langgraph-checkpoint==4.1.1
+langgraph-checkpoint-sqlite==3.1.0
 chromadb==1.5.6
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
