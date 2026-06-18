@@ -95,6 +95,7 @@ def create_scheduled_operation(
     zone_id: Optional[str] = None,
     assigned_crew: Optional[list[str]] = None,
     created_by: str = "system",
+    operation_class: str = "PLANNED",
     db_path: Optional[str] = None,
 ) -> str:
     """Insert a new scheduled operation. Returns the generated operation_id."""
@@ -102,8 +103,9 @@ def create_scheduled_operation(
     query = """
     INSERT INTO scheduled_operations
       (operation_id, title, operation_type, pipe_id, valve_ids, zone_id,
-       scheduled_start, scheduled_end, priority, description, assigned_crew, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       scheduled_start, scheduled_end, priority, operation_class, description,
+       assigned_crew, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
     with get_sqlite_connection(db_path) as conn:
         conn.execute(query, (
@@ -111,13 +113,31 @@ def create_scheduled_operation(
             json.dumps(valve_ids or []),
             zone_id,
             scheduled_start, scheduled_end,
-            priority, description,
+            priority, operation_class.upper(), description,
             json.dumps(assigned_crew or []),
             created_by,
         ))
         conn.commit()
-    logger.info("Created scheduled operation %s", operation_id)
+    logger.info("Created scheduled operation %s (%s)", operation_id, operation_class)
     return operation_id
+
+
+def reschedule_operation(
+    operation_id: str,
+    new_start: str,
+    new_end: str,
+    db_path: Optional[str] = None,
+) -> bool:
+    """Move an active operation to a new window. Returns True if a row was updated."""
+    query = """
+    UPDATE scheduled_operations
+    SET scheduled_start = ?, scheduled_end = ?, updated_at = datetime('now')
+    WHERE operation_id = ? AND status NOT IN ('COMPLETED', 'CANCELLED')
+    """
+    with get_sqlite_connection(db_path) as conn:
+        cur = conn.execute(query, (new_start, new_end, operation_id))
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def cancel_operation(operation_id: str, db_path: Optional[str] = None) -> bool:

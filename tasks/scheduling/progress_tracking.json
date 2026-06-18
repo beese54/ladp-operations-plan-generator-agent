@@ -1,8 +1,8 @@
 {
   "feature": "Conversational Scheduling Agent + Calendar UI",
   "parent_project": "Water Network Operations Plan Generator",
-  "last_updated": "2026-06-17",
-  "status": "IN_PROGRESS — Phases 1-3 done + verified; next: Phase 4 booking write path",
+  "last_updated": "2026-06-18",
+  "status": "IN_PROGRESS — Phases 1-4 done + verified; next: Phase 5 calendar UI",
   "phases": [
     {
       "phase": 1,
@@ -38,9 +38,10 @@
       "phase": 4,
       "name": "Booking + emergency preemption/reschedule",
       "tasks": [
-        {"id": "S4.1", "name": "HITL confirmation interrupt before writes",             "status": "Pending", "depends_on": ["S2.3"]},
-        {"id": "S4.2", "name": "planned booking write path",                            "status": "Pending", "depends_on": ["S4.1"]},
-        {"id": "S4.3", "name": "emergency preempt + auto-propose reschedule (PATCH)",    "status": "Pending", "depends_on": ["S4.1", "S1.2"]}
+        {"id": "S4.0", "name": "calendar_tools: create w/ operation_class + reschedule_operation", "status": "Completed", "depends_on": ["S2.1"]},
+        {"id": "S4.1", "name": "HITL confirmation interrupt before writes (booking_gate)", "status": "Completed", "depends_on": ["S2.3", "S3.4"]},
+        {"id": "S4.2", "name": "planned booking write path (+ offer suggested slot)",    "status": "Completed", "depends_on": ["S4.1"]},
+        {"id": "S4.3", "name": "emergency preempt + rebook displaced ops",              "status": "Completed", "depends_on": ["S4.1", "S4.0"]}
       ]
     },
     {

@@ -18,6 +18,8 @@ from agents.sop_agent import sop_agent_node
 from agents.historical_agent import historical_agent_node
 from agents.ops_plan_generator import ops_plan_generator_node
 from prompts.sop_walkthrough_prompt import format_sop_walkthrough
+from tools.calendar_tools import create_scheduled_operation, reschedule_operation
+from tools import scheduling_rules as sr
 
 logger = logging.getLogger(__name__)
 
@@ -339,6 +341,104 @@ def orchestrator_response_node(state: OrchestratorState) -> dict:
     return {"final_response": "\n".join(lines)}
 
 
+# ─── Node: Booking Gate (HITL confirm, then write to the calendar) ───────────
+_AFFIRMATIVE_WORDS = {"confirm", "yes", "y", "ok", "okay", "book", "proceed", "sure", "go"}
+
+
+def _is_affirmative(answer: Any) -> bool:
+    """True only on a clear yes — anything ambiguous declines (never books by accident)."""
+    text = (answer if isinstance(answer, str) else str(answer)).strip().lower()
+    first = text.split()[0] if text.split() else ""
+    return first in _AFFIRMATIVE_WORDS
+
+
+def _window_to_offer(state: OrchestratorState):
+    """Return (start_iso, end_iso, prompt) for the bookable window, or None."""
+    start = state.get("scheduled_start")
+    end = state.get("scheduled_end")
+    if not start or not end:
+        return None
+
+    cal = state.get("calendar_context") or {}
+    op_class = (state.get("operation_class") or "PLANNED").upper()
+    pipe_id = state.get("pipe_id", "")
+
+    if op_class == "EMERGENCY":
+        prompt = (
+            f"**Confirm this EMERGENCY booking** for `{pipe_id}` "
+            f"{_fmt_dt(start)} → {_fmt_dt(end)}? Displaced operations will be "
+            f"rescheduled as shown above. Reply `confirm` or `cancel`."
+        )
+        return start, end, prompt
+
+    # PLANNED — offer the requested window if valid, else the next valid slot.
+    if cal.get("is_feasible_date") and not cal.get("blocking_conflict"):
+        prompt = (
+            f"**Confirm booking** for `{pipe_id}` {_fmt_dt(start)} → {_fmt_dt(end)}? "
+            f"Reply `confirm` or `cancel`."
+        )
+        return start, end, prompt
+
+    suggested = cal.get("suggested_start")
+    if suggested:
+        duration = cal.get("estimated_duration_hours") or 0.0
+        s_dt, e_dt, _days = sr.layout_working_window(suggested[:10], duration)
+        prompt = (
+            f"The requested window isn't valid. **Book `{pipe_id}` for the next valid "
+            f"slot, {_fmt_dt(s_dt.isoformat())} → {_fmt_dt(e_dt.isoformat())}, instead?** "
+            f"Reply `confirm` or `cancel`."
+        )
+        return s_dt.isoformat(), e_dt.isoformat(), prompt
+
+    return None
+
+
+def _commit_booking(state: OrchestratorState, answer: Any, start: str, end: str) -> dict:
+    if not _is_affirmative(answer):
+        return {"final_response": "Understood — I haven't booked anything. "
+                                  "Just ask again whenever you're ready."}
+
+    op_class = (state.get("operation_class") or "PLANNED").upper()
+    pipe_id = state.get("pipe_id", "")
+    op_type = state.get("operation_type", "SHUTDOWN")
+    valves = (state.get("sop_chain") or {}).get("shutdown_valves") or []
+
+    op_id = create_scheduled_operation(
+        title=f"{op_class.title()} {op_type.lower()} — {pipe_id}",
+        operation_type=op_type,
+        pipe_id=pipe_id,
+        scheduled_start=start,
+        scheduled_end=end,
+        priority="HIGH" if op_class == "EMERGENCY" else "NORMAL",
+        valve_ids=valves,
+        operation_class=op_class,
+        created_by="chat",
+    )
+
+    lines = [f"✅ Booked **{op_id}** — `{pipe_id}` {_fmt_dt(start)} → {_fmt_dt(end)}."]
+    if op_class == "EMERGENCY":
+        for p in state.get("schedule_proposals") or []:
+            if reschedule_operation(p["operation_id"], p["proposed_start"], p["proposed_end"]):
+                lines.append(
+                    f"↪ Rescheduled {p['operation_id']} → "
+                    f"{_fmt_dt(p['proposed_start'])} → {_fmt_dt(p['proposed_end'])}."
+                )
+
+    return {"final_response": "\n".join(lines), "booked_operation_id": op_id}
+
+
+@mlflow.trace(name="booking_gate", span_type=SpanType.AGENT)
+def booking_gate_node(state: OrchestratorState) -> dict:
+    """Pause for operator confirmation, then persist the operation (HITL write gate)."""
+    offer = _window_to_offer(state)
+    if offer is None:
+        return {}  # nothing bookable — the plan has already been shown
+
+    start, end, prompt = offer
+    answer = interrupt({"clarification_question": (state.get("final_response") or "") + f"\n\n---\n{prompt}"})
+    return _commit_booking(state, answer, start, end)
+
+
 # ─── Node: Error Handler ──────────────────────────────────────────────────────
 @mlflow.trace(name="error_handler", span_type=SpanType.AGENT)
 def error_handler_node(state: OrchestratorState) -> dict:
@@ -403,6 +503,7 @@ def build_orchestrator_graph():
     graph.add_node("historical_agent",      historical_agent_node)
     graph.add_node("ops_plan_generator",    ops_plan_generator_node)
     graph.add_node("orchestrator_response", orchestrator_response_node)
+    graph.add_node("booking_gate",          booking_gate_node)
     graph.add_node("error_handler",         error_handler_node)
 
     graph.add_edge(START, "intent_parser")
@@ -438,8 +539,11 @@ def build_orchestrator_graph():
         ["orchestrator_response", "error_handler"],
     )
 
+    # After the plan is rendered, pause for booking confirmation (HITL write gate).
+    graph.add_edge("orchestrator_response", "booking_gate")
+    graph.add_edge("booking_gate",          END)
+
     graph.add_edge("general_response",      END)
-    graph.add_edge("orchestrator_response", END)
     graph.add_edge("error_handler",         END)
 
     checkpointer = MemorySaver()
@@ -493,6 +597,7 @@ def invoke_graph(user_message: str, session_id: str | None = None) -> dict[str, 
         "historical_context": None,
         "operations_plan": None,
         "sop_chain": None,
+        "booked_operation_id": None,
         "agents_completed": [],
         "error_messages": [],
         "final_response": None,

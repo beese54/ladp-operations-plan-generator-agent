@@ -101,6 +101,7 @@ class OrchestratorState(TypedDict):
     historical_context: Optional[HistoricalContext]
     operations_plan: Optional[OperationsPlan]
     sop_chain: Optional[dict[str, Any]]   # deterministic SOP walkthrough chain (build_sop_chain_data)
+    booked_operation_id: Optional[str]    # set once the operation is committed to the calendar
 
     # Orchestration control — Annotated so parallel nodes can both append safely
     agents_completed: Annotated[list[str], operator.add]

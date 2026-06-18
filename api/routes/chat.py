@@ -78,5 +78,6 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
         has_plan=plan is not None,
         operations_plan=dict(plan) if plan else None,
         awaiting_clarification=awaiting_clarification,
+        booked_operation_id=result.get("booked_operation_id"),
         processing_time_ms=elapsed_ms,
     )

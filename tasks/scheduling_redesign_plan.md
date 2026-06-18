@@ -93,7 +93,14 @@ S3.1–S3.5 shipped (commits 95113a2 = layout engine + tests; <this commit> = in
 - `tests/test_schedule_agent.py` — rewritten for the new model. Full suite 31 passed.
 - Verified live (direct + HTTP): one-shot, 3-turn slot-filling, Friday R3 + suggestion, emergency. pipe_084 = 4 valves → 4h → single-day window.
 
-**NEXT STEP (Phase 4 — booking write path):** S4.1 HITL confirmation interrupt before any DB write; S4.2 persist the computed (multi-day) window via `create_scheduled_operation`; S4.3 emergency preempt + rebook displaced ops (the reschedule proposals are already computed in calendar_agent). Pre-existing note: SOP retrieval logs `'RustBindingsAPI' object has no attribute 'bindings'` (ChromaDB), degrades gracefully — unrelated to scheduling.
+**Phase 4 COMPLETE + verified (2026-06-18).** Booking write path with HITL confirmation:
+- `tools/calendar_tools.py` — `create_scheduled_operation` now sets `operation_class`; new `reschedule_operation`.
+- `agents/orchestrator.py` — `booking_gate_node` (after orchestrator_response): offers the bookable window (feasible PLANNED → requested window; infeasible → suggested slot; EMERGENCY → computed window), `interrupt()`s for confirm/cancel, then `_commit_booking` writes via `create_scheduled_operation` and rebooks displaced ops (`reschedule_operation`) for emergencies. Graph: orchestrator_response → booking_gate → END.
+- `schemas/graph_state.py` + `api_models.py` + `chat.py` — `booked_operation_id` surfaced.
+- Tests: `tests/test_calendar_tools.py` + `tests/test_booking.py` (21 new). Full suite **52 passed**.
+- Verified live: planned confirm → booked → next-day request trips R2 (persistence proven); cancel → nothing booked; infeasible → offered suggested slot; emergency → booked. Test rows cleaned up via `cancel_operation`.
+
+**NEXT STEP (Phase 5 — Calendar UI + holidays endpoint):** S5.1 `GET /api/v1/holidays` + verify/extend `GET /api/v1/schedule` response shape; S5.2 frontend `CalendarView.jsx` (month grid, PLANNED vs EMERGENCY colour-coded, festive blackout shaded, click op → detail) with a toggle beside the Cytoscape graph. S5.3 (seed 2026 ops) already done. Pre-existing note: SOP retrieval logs `'RustBindingsAPI' object has no attribute 'bindings'` (ChromaDB), degrades gracefully — unrelated to scheduling.
 
 **Servers:** backend :8001 + frontend :5174 run in the background; restart on resume.
 
