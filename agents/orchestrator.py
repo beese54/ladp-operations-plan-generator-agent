@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -20,6 +21,7 @@ from agents.ops_plan_generator import ops_plan_generator_node
 from prompts.sop_walkthrough_prompt import format_sop_walkthrough
 from tools.calendar_tools import create_scheduled_operation, reschedule_operation
 from tools import scheduling_rules as sr
+from tools import valve_operation_rules as vor
 
 logger = logging.getLogger(__name__)
 
@@ -258,85 +260,56 @@ def orchestrator_response_node(state: OrchestratorState) -> dict:
     if not plan:
         return {"final_response": "I was unable to generate an operations plan. Please try again."}
 
-    verdict = plan.get("feasibility_verdict", "CONDITIONAL")
-    verdict_emoji = {"FEASIBLE": "✅", "NOT_FEASIBLE": "❌", "CONDITIONAL": "⚠️"}.get(verdict, "")
-
+    pipe_id = state.get("pipe_id", "")
+    cal = state.get("calendar_context") or {}
     lines: list[str] = []
 
-    # Lead with the deterministic SOP sequential logic, then the plan sections below.
+    # Conversational summary. The full step-by-step walkthrough (steps 1-12) is
+    # kept in state and served on request ("show the steps") rather than dumped.
     chain = state.get("sop_chain")
     if chain:
         try:
-            lines.append(format_sop_walkthrough(chain))
-            lines.append("")
-        except Exception as e:
-            logger.warning("Could not render SOP walkthrough: %s", e)
-
-    # System-computed window (start date + working-day layout); falls back to the
-    # requested start date if the calendar agent did not run.
-    cs, ce = state.get("scheduled_start"), state.get("scheduled_end")
-    window = f"{_fmt_dt(cs)} → {_fmt_dt(ce)}" if cs and ce else (state.get("target_date") or "")
-
-    lines += [
-        f"## Operations Plan — Pipe `{state.get('pipe_id', '')}` | {window}",
-        f"\n**Feasibility:** {verdict_emoji} **{verdict}**",
-        f"> {plan.get('feasibility_reason', '')}",
-        "",
-    ]
-
-    # Deterministic scheduling assessment (rules engine output, not the LLM).
-    lines += _format_scheduling_section(state)
-
-    if plan.get("safety_warnings"):
-        lines.append("### ⚠️ Safety Warnings")
-        for w in plan["safety_warnings"]:
-            lines.append(f"- {w}")
-        lines.append("")
-
-    if plan.get("pre_operation_checks"):
-        lines.append("### Pre-Operation Checks")
-        for i, c in enumerate(plan["pre_operation_checks"], 1):
-            lines.append(f"{i}. {c}")
-        lines.append("")
-
-    if plan.get("valve_sequence"):
-        lines.append("### Valve Operation Sequence")
-        lines.append("| Step | Valve | Location | Action | Notes |")
-        lines.append("|------|-------|----------|--------|-------|")
-        for v in sorted(plan["valve_sequence"], key=lambda x: x.get("sequence_number", 0)):
+            n_actions = len(vor.chain_valve_actions(chain))
             lines.append(
-                f"| {v.get('sequence_number')} | `{v.get('valve_id')}` | {v.get('road_name')} "
-                f"| **{v.get('action')}** | {v.get('timing_note', '')} |"
+                f"I've worked through the steps to isolate `{pipe_id}` — "
+                f"**{n_actions} valve operations** in the shutdown sequence."
             )
-        lines.append("")
+        except Exception as e:
+            logger.warning("Could not size SOP chain: %s", e)
+            lines.append(f"I've worked through the steps to isolate `{pipe_id}`.")
 
-    if plan.get("affected_consumers_summary"):
-        lines.append("### Customer Impact")
-        lines.append(plan["affected_consumers_summary"])
-        lines.append("")
-
-    if plan.get("notifications_required"):
-        lines.append("### Notifications Required")
-        for n in plan["notifications_required"]:
-            lines.append(f"- {n}")
-        lines.append("")
-
-    if plan.get("post_operation_steps"):
-        lines.append("### Post-Operation Steps")
-        for i, s in enumerate(plan["post_operation_steps"], 1):
-            lines.append(f"{i}. {s}")
-        lines.append("")
-
-    # Prefer the deterministic duration/span computed by the calendar agent.
-    cal = state.get("calendar_context") or {}
+    # System-computed window + effort.
+    cs, ce = state.get("scheduled_start"), state.get("scheduled_end")
     duration = cal.get("estimated_duration_hours") or plan.get("estimated_duration_hours")
-    if duration:
-        wd = cal.get("working_days_count")
-        span = f" across {wd} working day(s)" if wd else ""
-        lines.append(f"**Estimated Duration:** {float(duration):.1f} hours{span}")
+    wd = cal.get("working_days_count")
+    if cs and ce:
+        span = f" — {wd} working day{'s' if (wd or 0) != 1 else ''}" if wd else ""
+        effort = f", ~{float(duration):.1f} h of valve work" if duration else ""
+        lines.append(f"\n📅 **Proposed slot:** {_fmt_dt(cs)} → {_fmt_dt(ce)}{span}{effort}.")
 
-    if plan.get("alternative_recommendation"):
-        lines.append(f"\n**Alternative Recommendation:** {plan['alternative_recommendation']}")
+    # Conflicts / scheduling assessment, conversationally.
+    pipe_conflicts = cal.get("conflicts") or []
+    if pipe_conflicts:
+        lines.append("\n⚠️ This clashes with an existing operation on the same pipe:")
+        for c in pipe_conflicts:
+            lines.append(
+                f"- {c.get('title', 'scheduled operation')} "
+                f"({_fmt_dt(c.get('scheduled_start'))} → {_fmt_dt(c.get('scheduled_end'))})"
+            )
+
+    sched = _format_scheduling_section(state)
+    if sched:
+        lines.append("")
+        lines += sched
+
+    # One-line customer impact + key safety note (full details stay in the plan object).
+    if plan.get("affected_consumers_summary"):
+        lines.append(f"👥 {plan['affected_consumers_summary']}")
+    if plan.get("safety_warnings"):
+        lines.append("\n⚠️ **Safety:** " + " ".join(plan["safety_warnings"][:2]))
+
+    if chain:
+        lines.append('\n_Ask me to **"show the steps"** for the full isolation walkthrough._')
 
     return {"final_response": "\n".join(lines)}
 
@@ -561,6 +534,16 @@ def get_graph():
     return _graph
 
 
+_STEPS_REQUEST_VERBS = ("show", "see", "view", "list", "what are", "what's", "give me", "display", "full", "detail")
+_STEPS_REQUEST_NOUNS = ("step", "procedure", "walkthrough", "walk through", "isolation sequence", "sop")
+
+
+def _is_steps_request(message: str) -> bool:
+    """Detect a request to see the stored isolation walkthrough."""
+    m = (message or "").lower()
+    return any(v in m for v in _STEPS_REQUEST_VERBS) and any(n in m for n in _STEPS_REQUEST_NOUNS)
+
+
 def invoke_graph(user_message: str, session_id: str | None = None) -> dict[str, Any]:
     """Invoke the orchestrator graph and return the final state."""
     if not session_id:
@@ -568,11 +551,23 @@ def invoke_graph(user_message: str, session_id: str | None = None) -> dict[str, 
 
     graph = get_graph()
     config = {"configurable": {"thread_id": session_id}}
+    snapshot = graph.get_state(config)
+
+    # Serve the stored step-by-step isolation walkthrough on request. Read-only:
+    # it does not start a new operation or disturb a pending interrupt, so a later
+    # "confirm" still resumes a paused booking.
+    if _is_steps_request(user_message):
+        chain = (snapshot.values or {}).get("sop_chain")
+        if chain:
+            text = format_sop_walkthrough(chain)
+        else:
+            text = ("I don't have an isolation procedure stored yet — ask me about a "
+                    "pipe shutdown first, then I can walk you through the steps.")
+        return {"final_response": text, "pipe_id": (snapshot.values or {}).get("pipe_id")}
 
     # If this thread is paused mid-run on a clarification interrupt, the user's
     # message is the answer to that question — resume the graph instead of
     # starting a fresh run (which would discard the pending operation context).
-    snapshot = graph.get_state(config)
     if snapshot.next:
         return graph.invoke(Command(resume=user_message), config=config)
 

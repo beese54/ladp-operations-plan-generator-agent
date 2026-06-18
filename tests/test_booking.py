@@ -36,6 +36,18 @@ def test_is_affirmative(ans, expected):
     assert orch._is_affirmative(ans) is expected
 
 
+@pytest.mark.parametrize("msg,expected", [
+    ("show me the steps", True),
+    ("what are the steps to isolate it?", True),
+    ("see the full procedure", True),
+    ("show the SOP", True),
+    ("can I shut pipe_084 on 2026-07-06, planned?", False),
+    ("confirm", False),
+])
+def test_is_steps_request(msg, expected):
+    assert orch._is_steps_request(msg) is expected
+
+
 # ── _window_to_offer ──
 def test_offer_feasible_planned_uses_requested_window():
     s, e, prompt = orch._window_to_offer(_state(feasible=True))
