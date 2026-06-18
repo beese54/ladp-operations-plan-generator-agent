@@ -120,6 +120,41 @@ def test_emergency_displaces_overlapping_planned_and_proposes_slot(monkeypatch):
     assert sr.is_working_day(new_start)
 
 
+def test_operations_in_month_filters_and_flags_clash():
+    existing = [
+        {"operation_id": "A", "pipe_id": "pipe_001",
+         "scheduled_start": "2026-07-06T10:00:00", "scheduled_end": "2026-07-06T16:00:00"},
+        {"operation_id": "B", "pipe_id": "pipe_002",
+         "scheduled_start": "2026-07-20T10:00:00", "scheduled_end": "2026-07-20T16:00:00"},
+        {"operation_id": "C", "pipe_id": "pipe_003",  # August — different month
+         "scheduled_start": "2026-08-03T10:00:00", "scheduled_end": "2026-08-03T16:00:00"},
+    ]
+    res = calendar_agent._operations_in_month(
+        existing, "2026-07-06", "2026-07-06T12:00:00", "2026-07-06T18:00:00")
+    flags = {o["operation_id"]: o["clash"] for o in res}
+    assert set(flags) == {"A", "B"}     # only July ops surface
+    assert flags["A"] is True           # overlaps the proposed window
+    assert flags["B"] is False          # same month, no overlap
+
+
+def test_month_operations_empty_when_no_other_ops(no_db):
+    out = calendar_agent.calendar_agent_node(_state("2026-06-17", valves=2))
+    assert out["calendar_context"]["month_operations"] == []
+
+
+def test_month_operations_surface_and_flag_clash(monkeypatch):
+    op = {"operation_id": "OPS-X", "pipe_id": "pipe_033", "operation_class": "PLANNED",
+          "status": "PLANNED", "scheduled_start": "2026-06-17T11:00:00",
+          "scheduled_end": "2026-06-17T15:00:00"}
+    monkeypatch.setattr(calendar_agent, "get_active_operations", lambda: [op])
+    monkeypatch.setattr(calendar_agent, "check_pipe_schedule_conflicts",
+                        lambda p, s, e: [])
+    out = calendar_agent.calendar_agent_node(_state("2026-06-17", valves=2))
+    mo = out["calendar_context"]["month_operations"]
+    assert [o["operation_id"] for o in mo] == ["OPS-X"]
+    assert mo[0]["clash"] is True
+
+
 def test_emergency_no_overlap_yields_no_proposals(monkeypatch):
     planned = {
         "operation_id": "op-seed-2",

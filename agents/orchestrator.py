@@ -329,6 +329,26 @@ def orchestrator_response_node(state: OrchestratorState) -> dict:
         lines.append("")
         lines += sched
 
+    # Holistic month view — what's already on the calendar for the requested month.
+    month_ops = cal.get("month_operations")
+    if state.get("scheduled_start") and month_ops is not None:
+        try:
+            label = datetime.fromisoformat(state.get("target_date")).strftime("%B %Y")
+        except (ValueError, TypeError):
+            label = "that month"
+        if month_ops:
+            lines.append(f"\n#### 📅 Already scheduled in {label}")
+            lines.append("| Operation | Pipe | When | Clash |")
+            lines.append("|-----------|------|------|-------|")
+            for o in sorted(month_ops, key=lambda x: x.get("scheduled_start", "")):
+                clash = "⚠️ **clash**" if o.get("clash") else "—"
+                lines.append(
+                    f"| {o.get('operation_id', '')} | `{o.get('pipe_id', '')}` | "
+                    f"{_fmt_dt(o.get('scheduled_start'))} → {_fmt_dt(o.get('scheduled_end'))} | {clash} |"
+                )
+        else:
+            lines.append(f"\n📅 Nothing else is scheduled in {label} — the calendar is clear.")
+
     # One-line customer impact (full safety/checks detail stays in the plan object).
     if plan.get("affected_consumers_summary"):
         lines.append(f"👥 {plan['affected_consumers_summary']}")

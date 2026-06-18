@@ -34,13 +34,52 @@ def _operation_duration_hours(state: OrchestratorState) -> float:
     return sr.estimate_duration_hours(2)
 
 
-def _empty_context(start: str, end: str, op_class: str, duration: float, days: int) -> CalendarContext:
+def _empty_context(start: str, end: str, op_class: str, duration: float, days: int,
+                   month_ops: list | None = None) -> CalendarContext:
     return CalendarContext(
         is_feasible_date=True, conflicts=[], blocking_conflict=False,
         checked_start=start, checked_end=end, operation_class=op_class,
         rule_violations=[], suggested_start=None, displaced_ops=[],
         estimated_duration_hours=duration, working_days_count=days,
+        month_operations=month_ops or [],
     )
+
+
+def _operations_in_month(existing: list[dict], ref_date: str,
+                         window_start: str, window_end: str) -> list[dict]:
+    """Active operations whose window touches the month of ref_date, each flagged
+    `clash=True` if it overlaps the proposed [window_start, window_end]."""
+    try:
+        ref = datetime.fromisoformat(ref_date)
+    except (ValueError, TypeError):
+        return []
+    month_start = datetime(ref.year, ref.month, 1)
+    nm = (ref.year + 1, 1) if ref.month == 12 else (ref.year, ref.month + 1)
+    next_month_start = datetime(nm[0], nm[1], 1)
+
+    try:
+        ws = datetime.fromisoformat(window_start) if window_start else None
+        we = datetime.fromisoformat(window_end) if window_end else None
+    except (ValueError, TypeError):
+        ws = we = None
+
+    out = []
+    for op in existing:
+        try:
+            s = datetime.fromisoformat(op["scheduled_start"])
+            e = datetime.fromisoformat(op["scheduled_end"])
+        except (ValueError, TypeError, KeyError):
+            continue
+        if s < next_month_start and e >= month_start:  # touches the month
+            out.append({
+                "operation_id": op.get("operation_id", ""),
+                "title": op.get("title", ""),
+                "pipe_id": op.get("pipe_id", ""),
+                "scheduled_start": op["scheduled_start"],
+                "scheduled_end": op["scheduled_end"],
+                "clash": bool(ws and we and s < we and e > ws),
+            })
+    return out
 
 
 def calendar_agent_node(state: OrchestratorState) -> dict:
@@ -66,6 +105,10 @@ def calendar_agent_node(state: OrchestratorState) -> dict:
     except Exception as e:
         logger.error("Could not load active operations: %s", e)
         existing = []
+
+    # Holistic month view: everything already scheduled in the requested month,
+    # flagged where it clashes with the proposed window.
+    month_ops = _operations_in_month(existing, target_date, start, end)
 
     # ── EMERGENCY: bypass rules, find displaced planned ops, propose new slots ──
     if op_class == "EMERGENCY":
@@ -95,7 +138,7 @@ def calendar_agent_node(state: OrchestratorState) -> dict:
             except ValueError as e:
                 logger.warning("No reschedule slot for %s: %s", op["operation_id"], e)
 
-        ctx = _empty_context(start, end, op_class, duration, days_count)
+        ctx = _empty_context(start, end, op_class, duration, days_count, month_ops)
         ctx["displaced_ops"] = displaced
         return {
             "calendar_context": ctx,
@@ -136,6 +179,7 @@ def calendar_agent_node(state: OrchestratorState) -> dict:
         displaced_ops=[],
         estimated_duration_hours=duration,
         working_days_count=days_count,
+        month_operations=month_ops,
     )
 
     return {

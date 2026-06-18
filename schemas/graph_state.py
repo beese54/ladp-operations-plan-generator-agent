@@ -35,6 +35,7 @@ class CalendarContext(TypedDict):
     displaced_ops: list[dict[str, Any]]  # planned ops an emergency would displace
     estimated_duration_hours: float      # effort sized from the valve chain
     working_days_count: int              # working days the window spans
+    month_operations: list[dict[str, Any]]  # ops scheduled in the requested month (clash-flagged)
 
 
 class TopologyContext(TypedDict):
