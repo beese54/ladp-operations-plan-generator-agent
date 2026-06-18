@@ -33,21 +33,28 @@ def test_table_has_markdown_header_and_core_rows():
     assert out.startswith("### Isolation procedure — `pipe_084`")
     assert "| Step | Stage | Detail |" in out
     assert "|------|-------|--------|" in out
-    # trace rows are numbered, tail + canonical 9-12 present
     assert "| 1 | Downstream trace |" in out
     assert "Tail-end valve" in out
-    assert "| 10 | Shutdown chain | close in order:" in out
-    assert "| 11 | Affected valves |" in out
+    assert "Shutdown chain | close in order:" in out
+    assert "Affected valves |" in out
     # cells must not contain stray pipes that would break the table
     for line in out.splitlines():
         if line.startswith("|"):
             assert line.count("|") >= 4  # leading + 3 columns + trailing
 
 
+def test_table_steps_are_sequential():
+    out = format_sop_walkthrough_table(_chain())
+    nums = [int(line.split("|")[1].strip())
+            for line in out.splitlines()
+            if line.startswith("|") and line.split("|")[1].strip().isdigit()]
+    assert nums == list(range(1, len(nums) + 1))  # 1,2,3,... no gaps
+
+
 def test_table_alt_feed_branch():
     out = format_sop_walkthrough_table(_chain(alt=True))
-    assert "| 9 | Alternate feed | ✅ available via `pipe_091`" in out
-    assert "| 12 | Re-feed reversal |" in out
+    assert "Alternate feed | ✅ available via `pipe_091`" in out
+    assert "Re-feed reversal |" in out
     assert "final shutdown" in out
     # tail valve spared when an alternate feed exists
     assert "valve_037` spared" in out
@@ -55,5 +62,5 @@ def test_table_alt_feed_branch():
 
 def test_table_no_alt_feed_branch():
     out = format_sop_walkthrough_table(_chain(alt=False))
-    assert "| 9 | Alternate feed | ❌ none" in out
-    assert "| 12 | No alternate feed |" in out
+    assert "Alternate feed | ❌ none" in out
+    assert "No alternate feed |" in out

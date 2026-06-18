@@ -501,47 +501,47 @@ def format_sop_walkthrough_table(chain: dict[str, Any]) -> str:
         "|------|-------|--------|",
     ]
 
-    n = 0
+    n = 0  # sequential step counter across every row
+
     for s in steps:
         n += 1
         L.append(f"| {n} | Downstream trace | `{s['from_valve']}` → `{s['pipe_id']}` "
                  f"→ `{s['to_valve']}` ({s['status']}) |")
+
     n += 1
     L.append(f"| {n} | Tail-end valve | `{tail}` — no further open same-road pipe |")
 
+    n += 1
     if alt:
-        L.append(f"| 9 | Alternate feed | ✅ available via `{alt['pipe_id']}` "
+        L.append(f"| {n} | Alternate feed | ✅ available via `{alt['pipe_id']}` "
                  f"from `{alt['from_valve_id']}` ({alt['status']}) |")
     else:
-        L.append("| 9 | Alternate feed | ❌ none — affected area loses supply |")
+        L.append(f"| {n} | Alternate feed | ❌ none — affected area loses supply |")
 
+    n += 1
     chain_str = " → ".join(f"`{v}`" for v in sv) or "—"
-    L.append(f"| 10 | Shutdown chain | close in order: {chain_str} |")
+    L.append(f"| {n} | Shutdown chain | close in order: {chain_str} |")
 
+    n += 1
     affected = [v for v in downstream if v["valve_id"] != tail] if alt else list(downstream)
     if affected:
         items = ", ".join(f"`{v['valve_id']}` ({v['road_name']})" for v in affected)
     else:
         items = "none"
     spared = f" — `{tail}` spared (alternate feed)" if alt else ""
-    L.append(f"| 11 | Affected valves | {items}{spared} |")
+    L.append(f"| {n} | Affected valves | {items}{spared} |")
 
     if alt:
         forward = sp[::-1]
-        pairs = []
         for i, c in enumerate(rev):
+            n += 1
             fwd = forward[i] if i < len(forward) else "?"
             tag = " — **final shutdown**" if i == len(rev) - 1 else ""
-            pairs.append(f"open `{c['pipe_id']}` (`{c['from_valve']}`→`{c['to_valve']}`), "
-                         f"then close `{fwd}`{tag}")
-        if pairs:
-            L.append(f"| 12 | Re-feed reversal | {pairs[0]} |")
-            for p in pairs[1:]:
-                L.append(f"|  | Re-feed reversal | {p} |")
-        else:
-            L.append("| 12 | Re-feed reversal | (no reverse pairs) |")
+            L.append(f"| {n} | Re-feed reversal | open `{c['pipe_id']}` "
+                     f"(`{c['from_valve']}`→`{c['to_valve']}`), then close `{fwd}`{tag} |")
     else:
-        L.append("| 12 | No alternate feed | notify residents; deploy water wagon "
+        n += 1
+        L.append(f"| {n} | No alternate feed | notify residents; deploy water wagon "
                  "& bags to affected roads |")
 
     return "\n".join(L)
