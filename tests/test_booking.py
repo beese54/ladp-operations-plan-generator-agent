@@ -3,6 +3,8 @@
 The interrupt itself is exercised live; here we unit-test the pure decision and
 commit logic with the DB writes monkeypatched.
 """
+from datetime import datetime, timedelta
+
 import pytest
 
 from agents import orchestrator as orch
@@ -46,6 +48,37 @@ def test_is_affirmative(ans, expected):
 ])
 def test_is_steps_request(msg, expected):
     assert orch._is_steps_request(msg) is expected
+
+
+# ── near-term emergency nudge ──
+def test_is_near_term():
+    today = datetime.now().date()
+    assert orch._is_near_term(today.isoformat()) is True
+    assert orch._is_near_term((today + timedelta(days=1)).isoformat()) is True
+    assert orch._is_near_term((today + timedelta(days=5)).isoformat()) is False
+    assert orch._is_near_term(None) is False
+    assert orch._is_near_term("not-a-date") is False
+
+
+def test_clarification_slot_order():
+    assert orch._next_clarification_slot({})[0] == "pipe_id"
+    assert orch._next_clarification_slot({"pipe_id": "pipe_084"})[0] == "date"
+
+
+def test_clarification_far_date_asks_neutral_class():
+    far = (datetime.now().date() + timedelta(days=10)).isoformat()
+    slot, q = orch._next_clarification_slot({"pipe_id": "pipe_084", "target_date": far})
+    assert slot == "operation_class"
+    assert "short notice" not in q.lower()
+
+
+def test_clarification_near_term_nudges_emergency():
+    for d in (datetime.now().date(), datetime.now().date() + timedelta(days=1)):
+        slot, q = orch._next_clarification_slot(
+            {"pipe_id": "pipe_084", "target_date": d.isoformat()}
+        )
+        assert slot == "operation_class"
+        assert "emergency" in q.lower() and "short notice" in q.lower()
 
 
 # ── _window_to_offer ──

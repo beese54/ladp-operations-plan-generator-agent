@@ -2,7 +2,7 @@ import json
 import logging
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -175,6 +175,37 @@ def _merge_clarification(state: OrchestratorState, user_response: Any) -> str:
 
 
 # ─── Node: Clarification (slot-aware, one missing slot at a time) ────────────
+def _is_near_term(target_date: str | None) -> bool:
+    """True if the requested start date is today or tomorrow (short notice)."""
+    if not target_date:
+        return False
+    try:
+        d = datetime.fromisoformat(target_date).date()
+    except (ValueError, TypeError):
+        return False
+    today = datetime.now().date()
+    return d in (today, today + timedelta(days=1))
+
+
+def _next_clarification_slot(state: OrchestratorState) -> tuple[str, str]:
+    """First missing slot (pipe_id -> date -> operation_class) and its question.
+
+    When the class is still unknown but the start date is today/tomorrow, the
+    question proactively asks whether it's an emergency — short notice usually
+    means urgency.
+    """
+    if not state.get("pipe_id"):
+        return "pipe_id", "Which pipe is this operation on? (e.g. `pipe_151`)"
+    if not state.get("target_date"):
+        return "date", "What date should the operation start? (e.g. `2026-07-06`)"
+    if _is_near_term(state.get("target_date")):
+        return "operation_class", (
+            "That's very short notice — is this an **emergency** shutdown? "
+            "Reply `emergency`, or `planned` if it can be scheduled normally."
+        )
+    return "operation_class", "Is this a **planned** operation or an **emergency**?"
+
+
 @mlflow.trace(name="clarification", span_type=SpanType.AGENT)
 def clarification_node(state: OrchestratorState) -> dict:
     round_num = state.get("clarification_round", 0)
@@ -189,17 +220,7 @@ def clarification_node(state: OrchestratorState) -> dict:
             "agents_completed": ["clarification_maxed"],
         }
 
-    # Ask for the first missing slot in priority order.
-    if not state.get("pipe_id"):
-        slot = "pipe_id"
-        question = "Which pipe is this operation on? (e.g. `pipe_151`)"
-    elif not state.get("target_date"):
-        slot = "date"
-        question = "What date should the operation start? (e.g. `2026-07-06`)"
-    else:  # operation_class missing
-        slot = "operation_class"
-        question = "Is this a **planned** operation or an **emergency**?"
-
+    slot, question = _next_clarification_slot(state)
     user_response = interrupt({"clarification_question": question})
 
     return {
