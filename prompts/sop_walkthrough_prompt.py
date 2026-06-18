@@ -358,6 +358,22 @@ def build_sop_chain_data(pipe_id: str) -> dict[str, Any]:
     else:
         downstream_valves_with_roads = []
 
+    # Valve diameters for every valve the operation touches — used by the valve
+    # operation timing SOP to size the schedule (valve_operation_rules.py).
+    involved_ids = set(shutdown_valves) | {from_id, to_id}
+    if alternate_feed:
+        involved_ids.add(alternate_feed["from_valve_id"])
+    for r in reverse_checks:
+        involved_ids.update([r["from_valve"], r["to_valve"]])
+    involved_ids.discard(None)
+    valve_diameters: dict[str, Any] = {}
+    if involved_ids:
+        diam_rows = _q(
+            "MATCH (v:Valve) WHERE v.id IN $ids RETURN v.id AS id, v.diameter_mm AS d",
+            {"ids": list(involved_ids)},
+        )
+        valve_diameters = {r["id"]: r["d"] for r in diam_rows if r.get("d") is not None}
+
     return {
         "pipe_id":                    pipe_id,
         "from_valve_id":              from_id,
@@ -371,6 +387,7 @@ def build_sop_chain_data(pipe_id: str) -> dict[str, Any]:
         "shutdown_valves":            list(dict.fromkeys(shutdown_valves)),
         "reverse_checks":             reverse_checks,
         "downstream_valves_with_roads": downstream_valves_with_roads,
+        "valve_diameters":            valve_diameters,
     }
 
 

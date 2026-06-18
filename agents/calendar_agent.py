@@ -18,18 +18,20 @@ from datetime import datetime
 from schemas.graph_state import OrchestratorState, CalendarContext
 from tools.calendar_tools import check_pipe_schedule_conflicts, get_active_operations
 from tools import scheduling_rules as sr
+from tools import valve_operation_rules as vor
 
 logger = logging.getLogger(__name__)
 
 
-def _valve_count(state: OrchestratorState) -> int:
-    """Number of valves to operate, from the deterministic shutdown chain.
+def _operation_duration_hours(state: OrchestratorState) -> float:
+    """Operation effort from the valve-operation timing SOP (diameter + travel).
 
-    Falls back to the two boundary valves if the chain is unavailable.
+    Falls back to a flat per-valve estimate if the shutdown chain is unavailable.
     """
     chain = state.get("sop_chain") or {}
-    valves = chain.get("shutdown_valves") or []
-    return len(valves) if valves else 2
+    if chain.get("shutdown_valves"):
+        return vor.operation_duration_hours(chain)
+    return sr.estimate_duration_hours(2)
 
 
 def _empty_context(start: str, end: str, op_class: str, duration: float, days: int) -> CalendarContext:
@@ -54,7 +56,7 @@ def calendar_agent_node(state: OrchestratorState) -> dict:
         }
 
     # ── Size the operation and lay it out across working days ──
-    duration = sr.estimate_duration_hours(_valve_count(state))
+    duration = _operation_duration_hours(state)
     start_dt, end_dt, working_days = sr.layout_working_window(target_date, duration)
     start, end = start_dt.isoformat(), end_dt.isoformat()
     days_count = len(working_days)
