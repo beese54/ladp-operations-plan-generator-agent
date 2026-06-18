@@ -329,11 +329,9 @@ def orchestrator_response_node(state: OrchestratorState) -> dict:
         lines.append("")
         lines += sched
 
-    # One-line customer impact + key safety note (full details stay in the plan object).
+    # One-line customer impact (full safety/checks detail stays in the plan object).
     if plan.get("affected_consumers_summary"):
         lines.append(f"👥 {plan['affected_consumers_summary']}")
-    if plan.get("safety_warnings"):
-        lines.append("\n⚠️ **Safety:** " + " ".join(plan["safety_warnings"][:2]))
 
     if chain:
         lines.append('\n_Ask me to **"show the steps"** for the full isolation walkthrough._')

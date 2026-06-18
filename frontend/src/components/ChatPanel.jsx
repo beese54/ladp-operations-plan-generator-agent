@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 const SESSION_ID = `web-${Date.now()}`
 
@@ -44,13 +46,18 @@ export default function ChatPanel({ onPipeResolved }) {
 
   return (
     <div style={styles.panel}>
+      <style>{markdownCss}</style>
       <div style={styles.header}>Operations Chat</div>
 
       <div style={styles.messages}>
         {messages.map((m, i) => (
           <div key={i} style={m.role === 'user' ? styles.userMsg : styles.assistantMsg}>
             <span style={styles.role}>{m.role === 'user' ? 'You' : 'Agent'}</span>
-            <pre style={styles.text}>{m.text}</pre>
+            {m.role === 'user'
+              ? <pre style={styles.text}>{m.text}</pre>
+              : <div className="md" style={styles.mdText}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
+                </div>}
           </div>
         ))}
         {loading && (
@@ -79,6 +86,27 @@ export default function ChatPanel({ onPipeResolved }) {
     </div>
   )
 }
+
+// Dark-theme styling for rendered markdown in assistant messages.
+const markdownCss = `
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 8px; }
+.md ul, .md ol { margin: 4px 0 8px; padding-left: 20px; }
+.md li { margin: 2px 0; }
+.md strong { color: #f1f5f9; font-weight: 700; }
+.md h1, .md h2, .md h3 { color: #e2e8f0; margin: 10px 0 6px; line-height: 1.3; }
+.md h1 { font-size: 15px; } .md h2 { font-size: 14px; } .md h3 { font-size: 13px; }
+.md code { background: #0b1220; border: 1px solid #334155; border-radius: 4px; padding: 1px 5px; font-size: 11px; font-family: ui-monospace, monospace; }
+.md pre { background: #0b1220; border: 1px solid #334155; border-radius: 6px; padding: 8px 10px; overflow-x: auto; }
+.md pre code { background: none; border: none; padding: 0; }
+.md table { border-collapse: collapse; width: 100%; margin: 6px 0; font-size: 11px; display: block; overflow-x: auto; }
+.md th, .md td { border: 1px solid #334155; padding: 4px 8px; text-align: left; white-space: nowrap; }
+.md th { background: #1e293b; color: #cbd5e1; font-weight: 600; }
+.md blockquote { border-left: 3px solid #475569; margin: 6px 0; padding: 2px 0 2px 10px; color: #94a3b8; }
+.md hr { border: none; border-top: 1px solid #334155; margin: 10px 0; }
+.md a { color: #60a5fa; }
+`
 
 const styles = {
   panel: { display: 'flex', flexDirection: 'column', height: '100%', background: '#0f172a' },
@@ -121,6 +149,12 @@ const styles = {
     wordBreak: 'break-word',
     margin: 0,
     fontFamily: 'inherit',
+    color: '#e2e8f0',
+  },
+  mdText: {
+    fontSize: 12,
+    lineHeight: 1.6,
+    wordBreak: 'break-word',
     color: '#e2e8f0',
   },
   typing: { fontSize: 12, color: '#64748b', fontStyle: 'italic' },
