@@ -477,6 +477,76 @@ def format_sop_walkthrough(chain: dict[str, Any]) -> str:
     return "\n".join(L)
 
 
+# ── Public: deterministic walkthrough as a markdown table ─────────────────────
+def format_sop_walkthrough_table(chain: dict[str, Any]) -> str:
+    """Render the SOP chain as a neat markdown table (steps 1-12), for the chat UI."""
+    pid = chain["pipe_id"]
+    from_v = chain["from_valve_id"]
+    to_v = chain["to_valve_id"]
+    road = chain.get("pipe_road_name", "")
+    status = chain.get("pipe_status", "unknown")
+    steps = chain.get("steps", [])
+    tail = chain.get("tail_valve_id", "")
+    alt = chain.get("alternate_feed")
+    sp = chain.get("shutdown_pipes", [])
+    sv = chain.get("shutdown_valves", [])
+    rev = chain.get("reverse_checks", [])
+    downstream = chain.get("downstream_valves_with_roads", [])
+
+    L = [
+        f"### Isolation procedure — `{pid}`",
+        f"Origin `{pid}` ({from_v} → {to_v}) · {road} · status **{status}**",
+        "",
+        "| Step | Stage | Detail |",
+        "|------|-------|--------|",
+    ]
+
+    n = 0
+    for s in steps:
+        n += 1
+        L.append(f"| {n} | Downstream trace | `{s['from_valve']}` → `{s['pipe_id']}` "
+                 f"→ `{s['to_valve']}` ({s['status']}) |")
+    n += 1
+    L.append(f"| {n} | Tail-end valve | `{tail}` — no further open same-road pipe |")
+
+    if alt:
+        L.append(f"| 9 | Alternate feed | ✅ available via `{alt['pipe_id']}` "
+                 f"from `{alt['from_valve_id']}` ({alt['status']}) |")
+    else:
+        L.append("| 9 | Alternate feed | ❌ none — affected area loses supply |")
+
+    chain_str = " → ".join(f"`{v}`" for v in sv) or "—"
+    L.append(f"| 10 | Shutdown chain | close in order: {chain_str} |")
+
+    affected = [v for v in downstream if v["valve_id"] != tail] if alt else list(downstream)
+    if affected:
+        items = ", ".join(f"`{v['valve_id']}` ({v['road_name']})" for v in affected)
+    else:
+        items = "none"
+    spared = f" — `{tail}` spared (alternate feed)" if alt else ""
+    L.append(f"| 11 | Affected valves | {items}{spared} |")
+
+    if alt:
+        forward = sp[::-1]
+        pairs = []
+        for i, c in enumerate(rev):
+            fwd = forward[i] if i < len(forward) else "?"
+            tag = " — **final shutdown**" if i == len(rev) - 1 else ""
+            pairs.append(f"open `{c['pipe_id']}` (`{c['from_valve']}`→`{c['to_valve']}`), "
+                         f"then close `{fwd}`{tag}")
+        if pairs:
+            L.append(f"| 12 | Re-feed reversal | {pairs[0]} |")
+            for p in pairs[1:]:
+                L.append(f"|  | Re-feed reversal | {p} |")
+        else:
+            L.append("| 12 | Re-feed reversal | (no reverse pairs) |")
+    else:
+        L.append("| 12 | No alternate feed | notify residents; deploy water wagon "
+                 "& bags to affected roads |")
+
+    return "\n".join(L)
+
+
 # ── Public: render user message ───────────────────────────────────────────────
 
 def render_sop_prompt(pipe_id: str) -> str:

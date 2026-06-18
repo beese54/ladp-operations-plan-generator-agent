@@ -20,7 +20,7 @@ from agents.neo4j_agent import neo4j_agent_node
 from agents.sop_agent import sop_agent_node
 from agents.historical_agent import historical_agent_node
 from agents.ops_plan_generator import ops_plan_generator_node
-from prompts.sop_walkthrough_prompt import format_sop_walkthrough
+from prompts.sop_walkthrough_prompt import format_sop_walkthrough_table
 from tools.calendar_tools import create_scheduled_operation, reschedule_operation
 from tools import scheduling_rules as sr
 from tools import valve_operation_rules as vor
@@ -621,7 +621,7 @@ def invoke_graph(user_message: str, session_id: str | None = None) -> dict[str, 
     if _is_steps_request(user_message):
         chain = (snapshot.values or {}).get("sop_chain")
         if chain:
-            text = format_sop_walkthrough(chain)
+            text = format_sop_walkthrough_table(chain)
         else:
             text = ("I don't have an isolation procedure stored yet — ask me about a "
                     "pipe shutdown first, then I can walk you through the steps.")
