@@ -81,6 +81,27 @@ def test_clarification_near_term_nudges_emergency():
         assert "emergency" in q.lower() and "short notice" in q.lower()
 
 
+# ── month schedule preview (shown when the date is given) ──
+def test_month_schedule_preview_lists_ops(monkeypatch):
+    ops = [{"operation_id": "OPS-1", "pipe_id": "pipe_043",
+            "scheduled_start": "2026-07-13T08:00:00", "scheduled_end": "2026-07-15T16:00:00"}]
+    monkeypatch.setattr(orch, "get_active_operations", lambda: ops)
+    out = orch._month_schedule_preview("2026-07-08")
+    assert "Already scheduled in July 2026" in out
+    assert "| Operation | Pipe | When |" in out
+    assert "OPS-1" in out and "`pipe_043`" in out
+
+
+def test_month_schedule_preview_empty(monkeypatch):
+    monkeypatch.setattr(orch, "get_active_operations", lambda: [])
+    assert "calendar is clear" in orch._month_schedule_preview("2026-07-08")
+
+
+def test_month_schedule_preview_bad_date():
+    assert orch._month_schedule_preview(None) == ""
+    assert orch._month_schedule_preview("not-a-date") == ""
+
+
 # ── _window_to_offer ──
 def test_offer_feasible_planned_uses_requested_window():
     s, e, prompt = orch._window_to_offer(_state(feasible=True))

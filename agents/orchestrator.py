@@ -15,13 +15,13 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from config.settings import get_settings, get_azure_openai_client, get_together_client
 from schemas.graph_state import OrchestratorState
-from agents.calendar_agent import calendar_agent_node
+from agents.calendar_agent import calendar_agent_node, _operations_in_month
 from agents.neo4j_agent import neo4j_agent_node
 from agents.sop_agent import sop_agent_node
 from agents.historical_agent import historical_agent_node
 from agents.ops_plan_generator import ops_plan_generator_node
 from prompts.sop_walkthrough_prompt import format_sop_walkthrough_table
-from tools.calendar_tools import create_scheduled_operation, reschedule_operation
+from tools.calendar_tools import create_scheduled_operation, reschedule_operation, get_active_operations
 from tools import scheduling_rules as sr
 from tools import valve_operation_rules as vor
 
@@ -206,6 +206,27 @@ def _next_clarification_slot(state: OrchestratorState) -> tuple[str, str]:
     return "operation_class", "Is this a **planned** operation or an **emergency**?"
 
 
+def _month_schedule_preview(target_date: str | None) -> str:
+    """A look at what's already booked in the requested month, shown the moment
+    the operator gives the date (no clash flags yet — the window isn't sized)."""
+    try:
+        label = datetime.fromisoformat(target_date).strftime("%B %Y")
+    except (ValueError, TypeError):
+        return ""
+    try:
+        ops = _operations_in_month(get_active_operations(), target_date, "", "")
+    except Exception as e:
+        logger.warning("Could not load month schedule preview: %s", e)
+        return ""
+    if not ops:
+        return f"📅 Nothing else is scheduled in **{label}** — the calendar is clear."
+    rows = ["| Operation | Pipe | When |", "|-----------|------|------|"]
+    for o in sorted(ops, key=lambda x: x.get("scheduled_start", "")):
+        rows.append(f"| {o.get('operation_id', '')} | `{o.get('pipe_id', '')}` | "
+                    f"{_fmt_dt(o.get('scheduled_start'))} → {_fmt_dt(o.get('scheduled_end'))} |")
+    return f"📅 **Already scheduled in {label}:**\n\n" + "\n".join(rows)
+
+
 @mlflow.trace(name="clarification", span_type=SpanType.AGENT)
 def clarification_node(state: OrchestratorState) -> dict:
     round_num = state.get("clarification_round", 0)
@@ -221,6 +242,12 @@ def clarification_node(state: OrchestratorState) -> dict:
         }
 
     slot, question = _next_clarification_slot(state)
+    # The date is now known and we're about to ask planned/emergency — show the
+    # month's existing schedule first for a holistic view.
+    if slot == "operation_class":
+        preview = _month_schedule_preview(state.get("target_date"))
+        if preview:
+            question = f"{preview}\n\n{question}"
     user_response = interrupt({"clarification_question": question})
 
     return {
