@@ -155,6 +155,21 @@ def test_month_operations_surface_and_flag_clash(monkeypatch):
     assert mo[0]["clash"] is True
 
 
+def test_emergency_detects_conflicting_emergency(monkeypatch):
+    existing_em = {"operation_id": "E-OLD", "pipe_id": "pipe_010",
+                   "operation_class": "EMERGENCY", "status": "PLANNED",
+                   "scheduled_start": "2026-09-15T10:00:00", "scheduled_end": "2026-09-15T16:00:00"}
+    monkeypatch.setattr(calendar_agent, "get_active_operations", lambda: [existing_em])
+    monkeypatch.setattr(calendar_agent, "check_pipe_schedule_conflicts",
+                        lambda p, s, e: [])
+    out = calendar_agent.calendar_agent_node(
+        _state("2026-09-15", op_class="EMERGENCY", valves=2))
+    ce = out["calendar_context"]["conflicting_emergencies"]
+    assert [o["operation_id"] for o in ce] == ["E-OLD"]
+    # an existing emergency is NOT treated as a PLANNED displacement
+    assert out["calendar_context"]["displaced_ops"] == []
+
+
 def test_emergency_no_overlap_yields_no_proposals(monkeypatch):
     planned = {
         "operation_id": "op-seed-2",

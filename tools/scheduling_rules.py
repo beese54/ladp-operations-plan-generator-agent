@@ -302,6 +302,28 @@ def find_displaced(
     return displaced
 
 
+def find_conflicting_emergencies(
+    emergency_start: DateLike,
+    emergency_end: DateLike,
+    existing_ops: Optional[Iterable[dict[str, Any]]] = None,
+    path: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Active EMERGENCY operations that overlap the given window.
+
+    Two emergencies cannot be auto-deconflicted by rule (both bypass R1-R3), so
+    these are surfaced for the operator to choose the running order.
+    """
+    e_start, e_end = _to_datetime(emergency_start), _to_datetime(emergency_end)
+    out = []
+    for op in _active_ops(existing_ops or []):
+        if (op.get("operation_class") or "PLANNED").upper() != "EMERGENCY":
+            continue
+        o_start, o_end = _op_window(op)
+        if _overlaps(e_start, e_end, o_start, o_end):
+            out.append(op)
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Duration estimation + working-day layout
 # --------------------------------------------------------------------------- #
@@ -379,3 +401,18 @@ def next_valid_layout_start(
     raise ValueError(
         f"No valid layout start within {max_lookahead_days} days of {desired_start}."
     )
+
+
+def window_working_hours(start: DateLike, end: DateLike, path: Optional[str] = None) -> float:
+    """Effort hours implied by an existing window: working days it spans
+    (inclusive) x DAILY_WORK_HOURS. Used to re-size a booked op when moving it."""
+    d1, d2 = _to_date(start), _to_date(end)
+    if d2 < d1:
+        d1, d2 = d2, d1
+    count = 0
+    cur = d1
+    while cur <= d2:
+        if is_working_day(cur, path):
+            count += 1
+        cur += timedelta(days=1)
+    return max(count, 1) * DAILY_WORK_HOURS

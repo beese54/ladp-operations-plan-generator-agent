@@ -41,7 +41,7 @@ def _empty_context(start: str, end: str, op_class: str, duration: float, days: i
         checked_start=start, checked_end=end, operation_class=op_class,
         rule_violations=[], suggested_start=None, displaced_ops=[],
         estimated_duration_hours=duration, working_days_count=days,
-        month_operations=month_ops or [],
+        month_operations=month_ops or [], conflicting_emergencies=[],
     )
 
 
@@ -140,6 +140,7 @@ def calendar_agent_node(state: OrchestratorState) -> dict:
 
         ctx = _empty_context(start, end, op_class, duration, days_count, month_ops)
         ctx["displaced_ops"] = displaced
+        ctx["conflicting_emergencies"] = sr.find_conflicting_emergencies(start, end, existing)
         return {
             "calendar_context": ctx,
             "scheduled_start": start,
@@ -180,6 +181,7 @@ def calendar_agent_node(state: OrchestratorState) -> dict:
         estimated_duration_hours=duration,
         working_days_count=days_count,
         month_operations=month_ops,
+        conflicting_emergencies=[],
     )
 
     return {

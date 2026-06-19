@@ -222,5 +222,34 @@ def test_next_valid_layout_start_skips_friday():
     assert d == date(2026, 6, 22)
 
 
+# --------------------------------------------------------------------------- #
+# Emergency-vs-emergency detection + window effort
+# --------------------------------------------------------------------------- #
+def _emerg(start, end, op_id="E1"):
+    return [{"operation_id": op_id, "operation_class": "EMERGENCY", "status": "PLANNED",
+             "scheduled_start": start, "scheduled_end": end}]
+
+
+def test_find_conflicting_emergencies_overlap():
+    existing = _emerg("2026-08-19T10:00:00", "2026-08-20T16:00:00")
+    res = sr.find_conflicting_emergencies("2026-08-19T12:00:00", "2026-08-19T18:00:00", existing)
+    assert [o["operation_id"] for o in res] == ["E1"]
+
+
+def test_find_conflicting_emergencies_ignores_planned_and_non_overlap():
+    planned = [{"operation_id": "P1", "operation_class": "PLANNED", "status": "PLANNED",
+                "scheduled_start": "2026-08-19T10:00:00", "scheduled_end": "2026-08-19T16:00:00"}]
+    assert sr.find_conflicting_emergencies("2026-08-19T11:00:00", "2026-08-19T12:00:00", planned) == []
+    far = _emerg("2026-09-01T10:00:00", "2026-09-01T16:00:00")
+    assert sr.find_conflicting_emergencies("2026-08-19T11:00:00", "2026-08-19T12:00:00", far) == []
+
+
+def test_window_working_hours():
+    # one working day
+    assert sr.window_working_hours("2026-06-17T10:00:00", "2026-06-17T16:00:00") == sr.DAILY_WORK_HOURS
+    # Thu -> Mon spans 3 working days (Thu, Fri, Mon); weekend skipped
+    assert sr.window_working_hours("2026-06-18", "2026-06-22") == 3 * sr.DAILY_WORK_HOURS
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

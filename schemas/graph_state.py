@@ -36,6 +36,7 @@ class CalendarContext(TypedDict):
     estimated_duration_hours: float      # effort sized from the valve chain
     working_days_count: int              # working days the window spans
     month_operations: list[dict[str, Any]]  # ops scheduled in the requested month (clash-flagged)
+    conflicting_emergencies: list[dict[str, Any]]  # active EMERGENCY ops overlapping this window
 
 
 class TopologyContext(TypedDict):
