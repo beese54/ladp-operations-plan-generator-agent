@@ -276,6 +276,10 @@ def _format_scheduling_section(state: OrchestratorState) -> list[str]:
         proposals = state.get("schedule_proposals") or []
         lines.append("### 🚨 Emergency Scheduling")
         lines.append("Emergency shutdown — scheduling rules bypassed; this operation takes priority.")
+        conflicts = cal.get("conflicting_emergencies") or []
+        if conflicts:
+            ids = ", ".join(f"`{c.get('operation_id', '')}`" for c in conflicts)
+            lines.append(f"⚠️ Overlaps existing emergency {ids} — you'll be asked which runs first.")
         if proposals:
             lines.append("\nThe following planned operations are displaced and need rescheduling:")
             lines.append("\n| Operation | Pipe | Was | Proposed new slot |")
@@ -472,9 +476,113 @@ def _commit_booking(state: OrchestratorState, answer: Any, start: str, end: str)
     return {"final_response": "\n".join(lines), "booked_operation_id": op_id}
 
 
+# ── Emergency-vs-emergency: operator decides which runs first ────────────────
+def _emergency_priority_question(state: OrchestratorState, conflicts: list[dict]) -> str:
+    pipe_id = state.get("pipe_id", "")
+    start, end = state.get("scheduled_start"), state.get("scheduled_end")
+    rows = [
+        "### ⚠️ Two emergencies coincide",
+        "Both bypass scheduling rules, so you decide which runs first:",
+        "",
+        "| Choice | Operation | Pipe | Window |",
+        "|--------|-----------|------|--------|",
+        f"| `new` | this request | `{pipe_id}` | {_fmt_dt(start)} → {_fmt_dt(end)} |",
+    ]
+    for c in conflicts:
+        rows.append(
+            f"| `{c.get('operation_id', '')}` | {c.get('operation_id', '')} | "
+            f"`{c.get('pipe_id', '')}` | {_fmt_dt(c.get('scheduled_start'))} → "
+            f"{_fmt_dt(c.get('scheduled_end'))} |"
+        )
+    ids = ", ".join(f"`{c.get('operation_id', '')}`" for c in conflicts)
+    rows.append("")
+    rows.append(
+        f"Which runs first? Reply `new` to run this request first (the other moves to "
+        f"right after), {ids} to run that one first, or `cancel`."
+    )
+    return "\n".join(rows)
+
+
+def _resolve_emergency_priority(answer: Any, conflicts: list[dict]):
+    """-> 'new' | <op_id> | None (cancel / unrecognised => safe no-op)."""
+    text = (answer if isinstance(answer, str) else str(answer)).strip().lower()
+    if not text or text.split()[0] in {"cancel", "no", "abort", "stop"}:
+        return None
+    if "new" in text or "this" in text or "mine" in text:
+        return "new"
+    for c in conflicts:
+        oid = str(c.get("operation_id", "")).lower()
+        if oid and oid in text:
+            return c.get("operation_id")
+    return None
+
+
+def _commit_emergency_priority(state: OrchestratorState, choice, conflicts: list[dict]) -> dict:
+    if choice is None:
+        return {"final_response": "Understood — I haven't booked anything. Tell me which "
+                "operation should run first (`new` or the operation ID) when you're ready."}
+
+    pipe_id = state.get("pipe_id", "")
+    op_type = state.get("operation_type", "SHUTDOWN")
+    valves = (state.get("sop_chain") or {}).get("shutdown_valves") or []
+    cal = state.get("calendar_context") or {}
+    duration = cal.get("estimated_duration_hours") or sr.estimate_duration_hours(2)
+
+    if choice == "new":
+        book_start, book_end = state.get("scheduled_start"), state.get("scheduled_end")
+    else:  # the chosen existing emergency keeps its slot; this op runs after it
+        chosen = next((c for c in conflicts if c.get("operation_id") == choice), None)
+        after = datetime.fromisoformat(chosen["scheduled_end"]).date() + timedelta(days=1)
+        s_dt, e_dt, _ = sr.layout_working_window(after, duration)
+        book_start, book_end = s_dt.isoformat(), e_dt.isoformat()
+
+    op_id = create_scheduled_operation(
+        title=f"Emergency {op_type.lower()} — {pipe_id}",
+        operation_type=op_type, pipe_id=pipe_id,
+        scheduled_start=book_start, scheduled_end=book_end,
+        priority="HIGH", valve_ids=valves, operation_class="EMERGENCY", created_by="chat",
+    )
+    lines = [f"✅ Booked **{op_id}** — `{pipe_id}` {_fmt_dt(book_start)} → {_fmt_dt(book_end)}."]
+
+    if choice == "new":
+        cursor = datetime.fromisoformat(book_end).date() + timedelta(days=1)
+        for c in conflicts:
+            hours = sr.window_working_hours(c["scheduled_start"], c["scheduled_end"])
+            s_dt, e_dt, _ = sr.layout_working_window(cursor, hours)
+            if reschedule_operation(c["operation_id"], s_dt.isoformat(), e_dt.isoformat()):
+                lines.append(f"↪ Moved {c['operation_id']} → "
+                             f"{_fmt_dt(s_dt.isoformat())} → {_fmt_dt(e_dt.isoformat())}.")
+            cursor = e_dt.date() + timedelta(days=1)
+    else:
+        lines.append(f"`{choice}` keeps its slot; this operation is scheduled right after it.")
+
+    # Any displaced PLANNED ops still get rebooked.
+    for p in state.get("schedule_proposals") or []:
+        if reschedule_operation(p["operation_id"], p["proposed_start"], p["proposed_end"]):
+            lines.append(f"↪ Rescheduled {p['operation_id']} → "
+                         f"{_fmt_dt(p['proposed_start'])} → {_fmt_dt(p['proposed_end'])}.")
+
+    return {"final_response": "\n".join(lines), "booked_operation_id": op_id}
+
+
 @mlflow.trace(name="booking_gate", span_type=SpanType.AGENT)
 def booking_gate_node(state: OrchestratorState) -> dict:
-    """Pause for operator confirmation, then persist the operation (HITL write gate)."""
+    """Pause for operator confirmation, then persist the operation (HITL write gate).
+
+    When the op is an emergency that overlaps another emergency, the gate instead
+    asks which runs first and auto-sequences the other (the choice is the confirm).
+    """
+    cal = state.get("calendar_context") or {}
+    op_class = (state.get("operation_class") or "PLANNED").upper()
+    conflicts = cal.get("conflicting_emergencies") or []
+
+    if op_class == "EMERGENCY" and conflicts and state.get("scheduled_start"):
+        question = ((state.get("final_response") or "") + "\n\n---\n"
+                    + _emergency_priority_question(state, conflicts))
+        answer = interrupt({"clarification_question": question})
+        choice = _resolve_emergency_priority(answer, conflicts)
+        return _commit_emergency_priority(state, choice, conflicts)
+
     offer = _window_to_offer(state)
     if offer is None:
         return {}  # nothing bookable — the plan has already been shown

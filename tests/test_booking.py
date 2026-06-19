@@ -102,6 +102,64 @@ def test_month_schedule_preview_bad_date():
     assert orch._month_schedule_preview("not-a-date") == ""
 
 
+# ── emergency-vs-emergency priority decision ──
+_CONFLICT = [{"operation_id": "OPS-OLD", "pipe_id": "pipe_010",
+              "scheduled_start": "2026-08-19T10:00:00", "scheduled_end": "2026-08-19T16:00:00"}]
+
+
+def _emerg_state(op_class="EMERGENCY"):
+    return {
+        "pipe_id": "pipe_084", "operation_type": "SHUTDOWN", "operation_class": op_class,
+        "scheduled_start": "2026-08-19T10:00:00", "scheduled_end": "2026-08-19T14:00:00",
+        "sop_chain": {"shutdown_valves": ["v1", "v2"]},
+        "schedule_proposals": [],
+        "calendar_context": {"estimated_duration_hours": 4.0, "conflicting_emergencies": _CONFLICT},
+    }
+
+
+@pytest.mark.parametrize("ans,expected", [
+    ("new", "new"), ("run this first", "new"),
+    ("OPS-OLD", "OPS-OLD"), ("keep ops-old first", "OPS-OLD"),
+    ("cancel", None), ("", None), ("huh?", None),
+])
+def test_resolve_emergency_priority(ans, expected):
+    assert orch._resolve_emergency_priority(ans, _CONFLICT) == expected
+
+
+def test_priority_new_first_books_and_moves_other(monkeypatch):
+    monkeypatch.setattr(orch, "create_scheduled_operation", lambda **kw: "OPS-NEW")
+    moved = []
+    monkeypatch.setattr(orch, "reschedule_operation",
+                        lambda op, s, e: moved.append((op, s, e)) or True)
+    out = orch._commit_emergency_priority(_emerg_state(), "new", _CONFLICT)
+    assert out["booked_operation_id"] == "OPS-NEW"
+    assert moved and moved[0][0] == "OPS-OLD"
+    # the moved slot starts strictly after the new op's end date
+    assert moved[0][1] > "2026-08-19T16:00:00"
+    assert "Moved OPS-OLD" in out["final_response"]
+
+
+def test_priority_existing_first_books_after_no_move(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(orch, "create_scheduled_operation",
+                        lambda **kw: captured.update(kw) or "OPS-NEW")
+    monkeypatch.setattr(orch, "reschedule_operation",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("should not move")))
+    out = orch._commit_emergency_priority(_emerg_state(), "OPS-OLD", _CONFLICT)
+    assert out["booked_operation_id"] == "OPS-NEW"
+    # new op scheduled AFTER the chosen op's end (2026-08-19) -> a later date
+    assert captured["scheduled_start"] > "2026-08-19T16:00:00"
+    assert "keeps its slot" in out["final_response"]
+
+
+def test_priority_cancel_writes_nothing(monkeypatch):
+    monkeypatch.setattr(orch, "create_scheduled_operation",
+                        lambda **kw: (_ for _ in ()).throw(AssertionError("should not book")))
+    out = orch._commit_emergency_priority(_emerg_state(), None, _CONFLICT)
+    assert "booked_operation_id" not in out
+    assert "haven't booked" in out["final_response"]
+
+
 # ── _window_to_offer ──
 def test_offer_feasible_planned_uses_requested_window():
     s, e, prompt = orch._window_to_offer(_state(feasible=True))
