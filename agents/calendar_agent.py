@@ -13,7 +13,7 @@ No LLM is used here. The window is set on top-level state so downstream nodes
 and the response use the system-computed schedule.
 """
 import logging
-from datetime import datetime
+from datetime import datetime, time
 
 from schemas.graph_state import OrchestratorState, CalendarContext
 from tools.calendar_tools import check_pipe_schedule_conflicts, get_active_operations
@@ -42,6 +42,7 @@ def _empty_context(start: str, end: str, op_class: str, duration: float, days: i
         rule_violations=[], suggested_start=None, displaced_ops=[],
         estimated_duration_hours=duration, working_days_count=days,
         month_operations=month_ops or [], conflicting_emergencies=[],
+        requested_end_date=None, window_auto_extended=False,
     )
 
 
@@ -99,6 +100,28 @@ def calendar_agent_node(state: OrchestratorState) -> dict:
     start_dt, end_dt, working_days = sr.layout_working_window(target_date, duration)
     start, end = start_dt.isoformat(), end_dt.isoformat()
     days_count = len(working_days)
+
+    # ── Operator-driven end date (PLANNED only): honor it when it gives the
+    # valve work enough room; auto-extend to the computed end when it doesn't ──
+    requested_end_date = None
+    window_auto_extended = False
+    user_end = state.get("target_end_date")
+    if (op_class != "EMERGENCY"
+            and (state.get("end_date_mode") or "").upper() == "USER" and user_end):
+        try:
+            requested_end = datetime.combine(
+                datetime.fromisoformat(user_end).date(), time(16, 0))
+        except (ValueError, TypeError):
+            logger.warning("Unparseable target_end_date: %r", user_end)
+        else:
+            requested_end_date = user_end
+            if requested_end >= end_dt:
+                end_dt = requested_end
+                end = end_dt.isoformat()
+                days_count = max(
+                    int(sr.window_working_hours(start_dt, end_dt) / sr.DAILY_WORK_HOURS), 1)
+            else:
+                window_auto_extended = True
 
     try:
         existing = get_active_operations()
@@ -182,6 +205,8 @@ def calendar_agent_node(state: OrchestratorState) -> dict:
         working_days_count=days_count,
         month_operations=month_ops,
         conflicting_emergencies=[],
+        requested_end_date=requested_end_date,
+        window_auto_extended=window_auto_extended,
     )
 
     return {

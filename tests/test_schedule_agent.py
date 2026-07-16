@@ -18,14 +18,20 @@ from agents import calendar_agent
 from tools import scheduling_rules as sr
 
 
-def _state(target_date, op_class="PLANNED", valves=2, pipe_id="pipe_084"):
+def _state(target_date, op_class="PLANNED", valves=2, pipe_id="pipe_084",
+           end_date_mode=None, target_end_date=None):
     """Build a state with a stubbed shutdown chain of `valves` valves."""
-    return {
+    state = {
         "pipe_id": pipe_id,
         "target_date": target_date,
         "operation_class": op_class,
         "sop_chain": {"shutdown_valves": [f"v{i}" for i in range(valves)]},
     }
+    if end_date_mode:
+        state["end_date_mode"] = end_date_mode
+    if target_end_date:
+        state["target_end_date"] = target_end_date
+    return state
 
 
 @pytest.fixture
@@ -82,6 +88,46 @@ def test_planned_large_chain_spans_multiple_days(no_db):
     ctx = out["calendar_context"]
     assert ctx["working_days_count"] >= 2
     assert out["scheduled_end"][:10] > out["scheduled_start"][:10]
+
+
+# --------------------------------------------------------------------------- #
+# Operator-driven end date (PLANNED only)
+# --------------------------------------------------------------------------- #
+def test_planned_user_end_date_honored_when_long_enough(no_db):
+    # 2 valves fit in one day; the operator allows until the following Tuesday.
+    out = calendar_agent.calendar_agent_node(
+        _state("2026-06-17", valves=2, end_date_mode="USER", target_end_date="2026-06-23"))
+    ctx = out["calendar_context"]
+
+    assert out["scheduled_end"] == "2026-06-23T16:00:00"
+    assert out["date_range_end"] == "2026-06-23"
+    assert ctx["requested_end_date"] == "2026-06-23"
+    assert ctx["window_auto_extended"] is False
+    # Wed 17 -> Tue 23 inclusive = 5 working days (weekend skipped).
+    assert ctx["working_days_count"] == 5
+
+
+def test_planned_user_end_too_short_auto_extends(no_db):
+    # 10 valves -> 8.5h -> needs 2 working days; operator only allows day 1.
+    out = calendar_agent.calendar_agent_node(
+        _state("2026-06-17", valves=10, end_date_mode="USER", target_end_date="2026-06-17"))
+    ctx = out["calendar_context"]
+
+    assert ctx["window_auto_extended"] is True
+    assert ctx["requested_end_date"] == "2026-06-17"
+    assert out["scheduled_end"].startswith("2026-06-18")  # extended to fit the work
+    assert ctx["working_days_count"] == 2
+
+
+def test_emergency_ignores_user_end_date(no_db):
+    out = calendar_agent.calendar_agent_node(
+        _state("2026-09-15", op_class="EMERGENCY", valves=2,
+               end_date_mode="USER", target_end_date="2026-09-30"))
+    ctx = out["calendar_context"]
+
+    assert ctx["requested_end_date"] is None
+    assert ctx["window_auto_extended"] is False
+    assert out["scheduled_end"].startswith("2026-09-15")  # auto-sized, not 09-30
 
 
 # --------------------------------------------------------------------------- #

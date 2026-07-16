@@ -41,6 +41,8 @@ Return ONLY a JSON object:
   "operation_type": "SHUTDOWN" | "INSPECTION" | "MAINTENANCE" | "GENERAL_QUERY" | "UNKNOWN",
   "pipe_id": "<pipe ID string or null>",
   "target_date": "<ISO date YYYY-MM-DD or null>",
+  "target_end_date": "<ISO date YYYY-MM-DD or null>",
+  "end_date_mode": "USER" | "AUTO" | null,
   "operation_class": "PLANNED" | "EMERGENCY" | null,
   "confidence": 0.0
 }
@@ -49,9 +51,14 @@ Rules:
 - GENERAL_QUERY: user is asking a question about the network, SOPs, schedules, or system without requesting a new operation.
 - UNKNOWN: message is off-topic or ambiguous.
 - Extract pipe_id exactly as stated (e.g. "pipe_151", "P-001").
-- target_date is the requested START date of the operation. The system computes the
-  end date itself from the operation's effort, so do NOT extract any time of day or
-  end date.
+- target_date is the requested START date of the operation. Do NOT extract any time
+  of day.
+- target_end_date is the operator's intended END date — when the pipe should be back
+  in service (e.g. "from 17 to 20 August", "until 20-08-26", "back in service by
+  25 August", "ends on the 20th"). When one is stated, set end_date_mode to "USER".
+- end_date_mode is "AUTO" when the operator defers the end date to the system
+  ("plan it for me", "you decide", "estimate it", "however long it takes",
+  "no end date"); "USER" when target_end_date is given; otherwise null.
 - operation_class: "EMERGENCY" if the user signals urgency (emergency, urgent, burst,
   leak, main break, pipe failure); "PLANNED" if they say planned/scheduled/routine;
   otherwise null.
@@ -105,15 +112,20 @@ def intent_parser_node(state: OrchestratorState) -> dict:
         logger.error("Intent parser error: %s", e)
         parsed = {"operation_type": "UNKNOWN", "confidence": 0.0}
 
-    # Preserve a class already supplied in an earlier turn so re-parsing a
-    # clarification answer never drops it.
+    # Preserve slots already supplied in earlier turns so re-parsing a
+    # clarification answer never drops them.
     op_class = parsed.get("operation_class") or state.get("operation_class")
     if isinstance(op_class, str):
         op_class = op_class.upper()
+    end_mode = parsed.get("end_date_mode") or state.get("end_date_mode")
+    if isinstance(end_mode, str):
+        end_mode = end_mode.upper()
 
     return {
         "pipe_id": parsed.get("pipe_id") or state.get("pipe_id"),
         "target_date": parsed.get("target_date") or state.get("target_date"),
+        "target_end_date": parsed.get("target_end_date") or state.get("target_end_date"),
+        "end_date_mode": end_mode,
         "operation_class": op_class,
         "operation_type": parsed.get("operation_type", "UNKNOWN"),
         "intent_confidence": float(parsed.get("confidence", 0.0)),
@@ -160,8 +172,8 @@ def general_response_node(state: OrchestratorState) -> dict:
     }
 
 
-# Up to 3 slots (pipe, start date, planned/emergency) may each need a turn.
-MAX_CLARIFICATION_ROUNDS = 4
+# Up to 4 slots (pipe, start date, planned/emergency, end date) may each need a turn.
+MAX_CLARIFICATION_ROUNDS = 5
 
 
 # ─── Helper: merge a clarification answer back into the running query ────────
@@ -195,24 +207,32 @@ def _example_date() -> str:
 
 
 def _next_clarification_slot(state: OrchestratorState) -> tuple[str, str]:
-    """First missing slot (pipe_id -> date -> operation_class) and its question.
+    """First missing slot (pipe_id -> date -> operation_class -> end date) and its
+    question.
 
     When the class is still unknown but the start date is today/tomorrow, the
     question proactively asks whether it's an emergency — short notice usually
-    means urgency.
+    means urgency. The end-date question is PLANNED-only: emergencies are sized
+    from the valve work without an extra round-trip.
     """
     if not state.get("pipe_id"):
         return "pipe_id", "Which pipe is this operation on? (e.g. `pipe_151`)"
     if not state.get("target_date"):
         return "date", f"What date should the operation start? (DD-MM-YY, e.g. `{_example_date()}`)"
-    if _is_near_term(state.get("target_date")):
+    if not state.get("operation_class"):
+        if _is_near_term(state.get("target_date")):
+            return "operation_class", (
+                "That's very short notice — is this an **emergency** shutdown? "
+                "Reply `emergency`, or `planned` if it can be scheduled normally."
+            )
         return "operation_class", (
-            "That's very short notice — is this an **emergency** shutdown? "
-            "Reply `emergency`, or `planned` if it can be scheduled normally."
+            "Is your requested shutdown date considered a **planned** or an "
+            "**emergency** operation?"
         )
-    return "operation_class", (
-        "Is your requested shutdown date considered a **planned** or an "
-        "**emergency** operation?"
+    return "end_date", (
+        "Is there an intended **end date** — when the pipe should be back in "
+        f"service (DD-MM-YY, e.g. `{_example_date()}`)? Reply with a date, or "
+        "`plan it for me` and I'll size the duration from the valve work involved."
     )
 
 
@@ -246,7 +266,8 @@ def clarification_node(state: OrchestratorState) -> dict:
                 "To plan an operation I need three things: the **pipe ID** "
                 f"(e.g. `pipe_151`), the **start date** (DD-MM-YY, e.g. `{_example_date()}`), and "
                 "whether it is a **planned** operation or an **emergency**. "
-                "Please provide these and try again."
+                "For planned operations you can also give an intended **end date**, "
+                "or ask me to plan the duration. Please provide these and try again."
             ),
             "agents_completed": ["clarification_maxed"],
         }
@@ -366,7 +387,15 @@ def orchestrator_response_node(state: OrchestratorState) -> dict:
     if cs and ce:
         span = f" — {wd} working day{'s' if (wd or 0) != 1 else ''}" if wd else ""
         effort = f", ~{float(duration):.1f} h of valve work" if duration else ""
-        lines.append(f"\n📅 **Proposed slot:** {_fmt_dt(cs)} → {_fmt_dt(ce)}{span}{effort}.")
+        honored = cal.get("requested_end_date") and not cal.get("window_auto_extended")
+        suffix = " — ends on your requested date" if honored else ""
+        lines.append(f"\n📅 **Proposed slot:** {_fmt_dt(cs)} → {_fmt_dt(ce)}{span}{effort}{suffix}.")
+        if cal.get("window_auto_extended"):
+            lines.append(
+                f"⚠️ Your requested end date {_fmt_date(cal.get('requested_end_date'))} "
+                f"is too short for the valve work involved — I've extended the "
+                f"window to {_fmt_dt(ce)}."
+            )
 
     # Conflicts / scheduling assessment, conversationally.
     pipe_conflicts = cal.get("conflicts") or []
@@ -657,6 +686,11 @@ def route_after_intent(state: OrchestratorState) -> str:
 
     # OPS query — require pipe, start date, and planned/emergency before proceeding.
     if not state.get("pipe_id") or not state.get("target_date") or not state.get("operation_class"):
+        return "clarification"
+
+    # PLANNED ops also need the end-date preference (an intended end date, or
+    # explicit deferral to the system). Emergencies skip this round-trip.
+    if (state.get("operation_class") or "").upper() == "PLANNED" and not state.get("end_date_mode"):
         return "clarification"
 
     # Complete — Neo4j first; it produces the topology + shutdown chain the

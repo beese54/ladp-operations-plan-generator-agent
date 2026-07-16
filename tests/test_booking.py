@@ -65,6 +65,29 @@ def test_clarification_slot_order():
     assert orch._next_clarification_slot({"pipe_id": "pipe_084"})[0] == "date"
 
 
+def test_clarification_planned_asks_end_date_last():
+    slot, q = orch._next_clarification_slot(
+        {"pipe_id": "pipe_084", "target_date": "2026-08-17", "operation_class": "PLANNED"}
+    )
+    assert slot == "end_date"
+    assert "end date" in q.lower() and "plan it for me" in q.lower()
+
+
+def test_route_requires_end_date_mode_for_planned_only():
+    base = {"operation_type": "SHUTDOWN", "pipe_id": "pipe_084",
+            "target_date": "2026-08-17"}
+    # PLANNED without an end-date answer -> keep clarifying.
+    assert orch.route_after_intent({**base, "operation_class": "PLANNED"}) == "clarification"
+    # PLANNED with either answer -> proceed.
+    assert orch.route_after_intent(
+        {**base, "operation_class": "PLANNED", "end_date_mode": "AUTO"}) == "neo4j_agent"
+    assert orch.route_after_intent(
+        {**base, "operation_class": "PLANNED", "end_date_mode": "USER",
+         "target_end_date": "2026-08-20"}) == "neo4j_agent"
+    # EMERGENCY skips the end-date question entirely.
+    assert orch.route_after_intent({**base, "operation_class": "EMERGENCY"}) == "neo4j_agent"
+
+
 def test_clarification_far_date_asks_neutral_class():
     far = (datetime.now().date() + timedelta(days=10)).isoformat()
     slot, q = orch._next_clarification_slot({"pipe_id": "pipe_084", "target_date": far})

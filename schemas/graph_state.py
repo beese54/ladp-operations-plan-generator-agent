@@ -37,6 +37,8 @@ class CalendarContext(TypedDict):
     working_days_count: int              # working days the window spans
     month_operations: list[dict[str, Any]]  # ops scheduled in the requested month (clash-flagged)
     conflicting_emergencies: list[dict[str, Any]]  # active EMERGENCY ops overlapping this window
+    requested_end_date: Optional[str]    # operator's intended end date, when given
+    window_auto_extended: bool           # requested end was too short; window extended to fit
 
 
 class TopologyContext(TypedDict):
@@ -83,6 +85,8 @@ class OrchestratorState(TypedDict):
     # Parsed intent
     pipe_id: Optional[str]
     target_date: Optional[str]           # ISO date "YYYY-MM-DD"
+    target_end_date: Optional[str]       # ISO date — operator's intended end (pipe back in service)
+    end_date_mode: Optional[str]         # "USER" (end date given) | "AUTO" (agent sizes it) | None (not asked)
     scheduled_start: Optional[str]       # ISO datetime "YYYY-MM-DDTHH:MM:SS"
     scheduled_end: Optional[str]         # ISO datetime "YYYY-MM-DDTHH:MM:SS"
     operation_type: str                  # SHUTDOWN | INSPECTION | MAINTENANCE | GENERAL_QUERY | UNKNOWN
@@ -92,7 +96,7 @@ class OrchestratorState(TypedDict):
 
     # Clarification tracking
     clarification_round: int             # max MAX_CLARIFICATION_ROUNDS before hard stop
-    awaiting_clarification: str          # "" | "pipe_id" | "date" | "operation_class"
+    awaiting_clarification: str          # "" | "pipe_id" | "date" | "operation_class" | "end_date"
 
     # Scheduling proposals (emergency displaces planned -> suggested new slots)
     schedule_proposals: Optional[list[dict[str, Any]]]
