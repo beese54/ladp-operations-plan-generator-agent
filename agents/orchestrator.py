@@ -276,6 +276,19 @@ def _fmt_dt(iso: str) -> str:
         return iso or ""
 
 
+# Old vs new dates in reschedule tables (tones readable on the dark chat theme).
+_OLD_DATE_COLOR = "#f87171"   # red — previous planned date
+_NEW_DATE_COLOR = "#4ade80"   # green — proposed new date
+
+
+def _fmt_date(iso: str) -> str:
+    """'2026-06-19T08:00:00' -> '2026-06-19'."""
+    try:
+        return datetime.fromisoformat(iso).strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        return iso or ""
+
+
 def _format_scheduling_section(state: OrchestratorState) -> list[str]:
     """Render the deterministic scheduling assessment from calendar_context."""
     cal = state.get("calendar_context") or {}
@@ -297,8 +310,8 @@ def _format_scheduling_section(state: OrchestratorState) -> list[str]:
             for p in proposals:
                 lines.append(
                     f"| {p['operation_id']} | `{p.get('pipe_id','')}` | "
-                    f"{_fmt_dt(p['old_start'])} → {_fmt_dt(p['old_end'])} | "
-                    f"**{_fmt_dt(p['proposed_start'])} → {_fmt_dt(p['proposed_end'])}** |"
+                    f'<span style="color:{_OLD_DATE_COLOR}">{_fmt_dt(p["old_start"])} → {_fmt_dt(p["old_end"])}</span> | '
+                    f'<span style="color:{_NEW_DATE_COLOR}">{_fmt_dt(p["proposed_start"])} → {_fmt_dt(p["proposed_end"])}</span> |'
                 )
             lines.append("")
         else:
@@ -378,15 +391,37 @@ def orchestrator_response_node(state: OrchestratorState) -> dict:
         except (ValueError, TypeError):
             label = "that month"
         if month_ops:
-            lines.append(f"\n#### 📅 Already scheduled in {label}")
-            lines.append("| Operation | Pipe | When | Clash |")
-            lines.append("|-----------|------|------|-------|")
+            # Emergency flow: displaced ops get an extra column showing the
+            # previous planned date (red) → proposed new date (green).
+            proposals_by_id = {
+                p["operation_id"]: p for p in state.get("schedule_proposals") or []
+            }
+            rescheduling = any(o.get("operation_id") in proposals_by_id for o in month_ops)
+            lines.append(f"\n#### 📅 Operation plans that are already scheduled in {label}")
+            header = "| Operation | Pipe | When | Clash |"
+            divider = "|-----------|------|------|-------|"
+            if rescheduling:
+                header += " Reschedule (old → new) |"
+                divider += "------------------------|"
+            lines.append(header)
+            lines.append(divider)
             for o in sorted(month_ops, key=lambda x: x.get("scheduled_start", "")):
                 clash = "⚠️ **clash**" if o.get("clash") else "—"
-                lines.append(
+                row = (
                     f"| {o.get('operation_id', '')} | `{o.get('pipe_id', '')}` | "
                     f"{_fmt_dt(o.get('scheduled_start'))} → {_fmt_dt(o.get('scheduled_end'))} | {clash} |"
                 )
+                if rescheduling:
+                    p = proposals_by_id.get(o.get("operation_id"))
+                    if p:
+                        row += (
+                            f' <span style="color:{_OLD_DATE_COLOR}">{_fmt_date(p["old_start"])}</span> → '
+                            f'<span style="color:{_NEW_DATE_COLOR}">{_fmt_date(p["proposed_start"])}</span> |'
+                        )
+                    else:
+                        row += " — |"
+                lines.append(row)
+            lines.append("")  # terminate the table so following text isn't absorbed into it
         else:
             lines.append(f"\n📅 Nothing else is scheduled in {label} — the calendar is clear.")
 

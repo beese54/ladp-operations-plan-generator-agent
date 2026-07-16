@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
 
 const SESSION_ID = `web-${Date.now()}`
 
@@ -56,7 +57,7 @@ export default function ChatPanel({ onPipeResolved }) {
             {m.role === 'user'
               ? <pre style={styles.text}>{m.text}</pre>
               : <div className="md" style={styles.mdText}>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{m.text}</ReactMarkdown>
                 </div>}
           </div>
         ))}
@@ -100,8 +101,8 @@ const markdownCss = `
 .md code { background: #0b1220; border: 1px solid #334155; border-radius: 4px; padding: 1px 5px; font-size: 11px; font-family: ui-monospace, monospace; }
 .md pre { background: #0b1220; border: 1px solid #334155; border-radius: 6px; padding: 8px 10px; overflow-x: auto; }
 .md pre code { background: none; border: none; padding: 0; }
-.md table { border-collapse: collapse; width: 100%; margin: 6px 0; font-size: 11px; display: block; overflow-x: auto; }
-.md th, .md td { border: 1px solid #334155; padding: 4px 8px; text-align: left; white-space: nowrap; }
+.md table { border-collapse: collapse; width: 100%; margin: 6px 0; font-size: 10.5px; }
+.md th, .md td { border: 1px solid #334155; padding: 3px 6px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
 .md th { background: #1e293b; color: #cbd5e1; font-weight: 600; }
 .md blockquote { border-left: 3px solid #475569; margin: 6px 0; padding: 2px 0 2px 10px; color: #94a3b8; }
 .md hr { border: none; border-top: 1px solid #334155; margin: 10px 0; }
