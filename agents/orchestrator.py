@@ -56,6 +56,8 @@ Rules:
   leak, main break, pipe failure); "PLANNED" if they say planned/scheduled/routine;
   otherwise null.
 - Resolve relative dates (today, tomorrow, next Monday) against the current date below.
+- Dates may be written day-first, e.g. "16-07-26" or "16/07/2026" means DD-MM-YY(YY).
+  Interpret short numeric dates day-first and still output ISO YYYY-MM-DD.
 Return ONLY the JSON object."""
 
 _GENERAL_SYSTEM = """You are a water network operations assistant.
@@ -187,6 +189,11 @@ def _is_near_term(target_date: str | None) -> bool:
     return d in (today, today + timedelta(days=1))
 
 
+def _example_date() -> str:
+    """Today's date in DD-MM-YY, used as the example in clarification prompts."""
+    return datetime.now().strftime("%d-%m-%y")
+
+
 def _next_clarification_slot(state: OrchestratorState) -> tuple[str, str]:
     """First missing slot (pipe_id -> date -> operation_class) and its question.
 
@@ -197,7 +204,7 @@ def _next_clarification_slot(state: OrchestratorState) -> tuple[str, str]:
     if not state.get("pipe_id"):
         return "pipe_id", "Which pipe is this operation on? (e.g. `pipe_151`)"
     if not state.get("target_date"):
-        return "date", "What date should the operation start? (e.g. `2026-07-06`)"
+        return "date", f"What date should the operation start? (e.g. `{_example_date()}`)"
     if _is_near_term(state.get("target_date")):
         return "operation_class", (
             "That's very short notice — is this an **emergency** shutdown? "
@@ -234,7 +241,7 @@ def clarification_node(state: OrchestratorState) -> dict:
         return {
             "final_response": (
                 "To plan an operation I need three things: the **pipe ID** "
-                "(e.g. `pipe_151`), the **start date** (e.g. `2026-07-06`), and "
+                f"(e.g. `pipe_151`), the **start date** (e.g. `{_example_date()}`), and "
                 "whether it is a **planned** operation or an **emergency**. "
                 "Please provide these and try again."
             ),
