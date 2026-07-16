@@ -204,7 +204,7 @@ def _next_clarification_slot(state: OrchestratorState) -> tuple[str, str]:
     if not state.get("pipe_id"):
         return "pipe_id", "Which pipe is this operation on? (e.g. `pipe_151`)"
     if not state.get("target_date"):
-        return "date", f"What date should the operation start? (e.g. `{_example_date()}`)"
+        return "date", f"What date should the operation start? (DD-MM-YY, e.g. `{_example_date()}`)"
     if _is_near_term(state.get("target_date")):
         return "operation_class", (
             "That's very short notice — is this an **emergency** shutdown? "
@@ -241,7 +241,7 @@ def clarification_node(state: OrchestratorState) -> dict:
         return {
             "final_response": (
                 "To plan an operation I need three things: the **pipe ID** "
-                f"(e.g. `pipe_151`), the **start date** (e.g. `{_example_date()}`), and "
+                f"(e.g. `pipe_151`), the **start date** (DD-MM-YY, e.g. `{_example_date()}`), and "
                 "whether it is a **planned** operation or an **emergency**. "
                 "Please provide these and try again."
             ),
