@@ -210,7 +210,10 @@ def _next_clarification_slot(state: OrchestratorState) -> tuple[str, str]:
             "That's very short notice — is this an **emergency** shutdown? "
             "Reply `emergency`, or `planned` if it can be scheduled normally."
         )
-    return "operation_class", "Is this a **planned** operation or an **emergency**?"
+    return "operation_class", (
+        "Is your requested shutdown date considered a **planned** or an "
+        "**emergency** operation?"
+    )
 
 
 def _month_schedule_preview(target_date: str | None) -> str:
@@ -231,7 +234,7 @@ def _month_schedule_preview(target_date: str | None) -> str:
     for o in sorted(ops, key=lambda x: x.get("scheduled_start", "")):
         rows.append(f"| {o.get('operation_id', '')} | `{o.get('pipe_id', '')}` | "
                     f"{_fmt_dt(o.get('scheduled_start'))} → {_fmt_dt(o.get('scheduled_end'))} |")
-    return f"📅 **Already scheduled in {label}:**\n\n" + "\n".join(rows)
+    return f"📅 **Operation plans that are already scheduled in {label}:**\n\n" + "\n".join(rows)
 
 
 @mlflow.trace(name="clarification", span_type=SpanType.AGENT)

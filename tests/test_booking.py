@@ -87,7 +87,7 @@ def test_month_schedule_preview_lists_ops(monkeypatch):
             "scheduled_start": "2026-07-13T08:00:00", "scheduled_end": "2026-07-15T16:00:00"}]
     monkeypatch.setattr(orch, "get_active_operations", lambda: ops)
     out = orch._month_schedule_preview("2026-07-08")
-    assert "Already scheduled in July 2026" in out
+    assert "Operation plans that are already scheduled in July 2026" in out
     assert "| Operation | Pipe | When |" in out
     assert "OPS-1" in out and "`pipe_043`" in out
 
