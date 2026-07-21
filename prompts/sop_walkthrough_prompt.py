@@ -272,6 +272,7 @@ def build_sop_chain_data(pipe_id: str) -> dict[str, Any]:
     steps:           list[dict] = []
     shutdown_pipes:  list[str]  = [pipe_id]
     shutdown_valves: list[str]  = [from_id, to_id]
+    visited_on_road: set[str]   = {from_id, to_id}
     current_valve = to_id
 
     while True:
@@ -281,7 +282,11 @@ def build_sop_chain_data(pipe_id: str) -> dict[str, Any]:
             "RETURN p.pipe_id AS pipe_id, v2.id AS next_valve, p.status AS pstatus LIMIT 1",
             {"vid": current_valve, "road": road},
         )
-        if not nxt:
+        # A same-road pipe that loops back to an already-visited valve (a ring
+        # in the network topology — e.g. pipe_049/pipe_050 both open between
+        # valve_020 and valve_021) would otherwise trace forever. Treat that
+        # the same as "no further open same-road pipe" and stop here.
+        if not nxt or nxt[0]["next_valve"] in visited_on_road:
             tail_valve_id = current_valve
             break
         r = nxt[0]
@@ -293,6 +298,7 @@ def build_sop_chain_data(pipe_id: str) -> dict[str, Any]:
         })
         shutdown_pipes.append(r["pipe_id"])
         shutdown_valves.append(r["next_valve"])
+        visited_on_road.add(r["next_valve"])
         current_valve = r["next_valve"]
 
     # ── Step 9: alternate feed (same query as sop_walkthrough.py) ────────────
