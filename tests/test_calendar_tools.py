@@ -51,3 +51,21 @@ def test_reschedule_missing_returns_false(db):
     assert ct.reschedule_operation(
         "OPS-NOPE", "2026-07-20T10:00:00", "2026-07-20T14:00:00", db_path=db
     ) is False
+
+
+def test_get_operation_returns_row_with_decoded_json(db):
+    op_id = ct.create_scheduled_operation(
+        title="x", operation_type="SHUTDOWN", pipe_id="pipe_084",
+        scheduled_start="2026-07-06T10:00:00", scheduled_end="2026-07-06T14:00:00",
+        valve_ids=["v1", "v2"], assigned_crew=["crew-1"], db_path=db,
+    )
+    op = ct.get_operation(op_id, db_path=db)
+    assert op is not None
+    assert op["operation_id"] == op_id
+    assert op["pipe_id"] == "pipe_084"
+    assert op["valve_ids"] == ["v1", "v2"]
+    assert op["assigned_crew"] == ["crew-1"]
+
+
+def test_get_operation_missing_returns_none(db):
+    assert ct.get_operation("OPS-NOPE", db_path=db) is None

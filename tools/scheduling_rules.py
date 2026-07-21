@@ -340,6 +340,90 @@ def estimate_duration_hours(
     return setup_hours + max(valve_count, 0) * (minutes_per_valve / 60.0)
 
 
+@dataclass(frozen=True)
+class WorkingStepsLayout:
+    """Per-step result of laying a sequence of action durations out across working days."""
+    steps: list[tuple[datetime, datetime]]           # one (start, end) pair per step_minutes entry, in order
+    start: datetime                                   # first working day at 10:00 (== setup_span[0] if any)
+    end: datetime                                     # == steps[-1][1] (or start, if no steps)
+    working_days: list[date]
+    setup_span: Optional[tuple[datetime, datetime]]   # None unless setup_hours > 0
+
+
+def layout_working_steps(
+    start: DateLike,
+    step_minutes: list[float],
+    path: Optional[str] = None,
+    setup_hours: float = 0.0,
+) -> WorkingStepsLayout:
+    """Per-action generalisation of layout_working_window.
+
+    Instead of chunking one lump duration across days, each entry of step_minutes
+    (in MINUTES) gets its own (start, end) timestamp pair, using the identical
+    day/rollover math: DAILY_START_HOUR/DAILY_WORK_HOURS window, is_working_day()
+    skip rule, greedy min(remaining, day_budget) chunking. A step's own time may
+    straddle a day boundary (mirrors layout_working_window's own willingness to
+    split a lump duration mid-hour at the day boundary) — this is what guarantees
+    the last step's end is always identical to what
+    layout_working_window(start, sum(step_minutes)/60 + setup_hours, path) would
+    return for the same total effort; layout_working_window is implemented in
+    terms of this function for exactly that reason.
+
+    setup_hours (default 0.0) is consumed as a leading block on day 1, using the
+    same chunking rule, reported separately via setup_span and excluded from
+    `steps`. Callers reconstructing an ALREADY-BOOKED window (whose duration was
+    computed by vor.operation_duration_hours, which does NOT include
+    SETUP_HOURS) must pass setup_hours=0.0 or the computed schedule will run past
+    the booked scheduled_end.
+    """
+    d = _to_date(start)
+    while not is_working_day(d, path):
+        d += timedelta(days=1)
+    start_dt = datetime.combine(d, time(DAILY_START_HOUR))
+
+    durations: list[float] = ([setup_hours * 60.0] if setup_hours > 0 else []) + [
+        float(m) for m in step_minutes
+    ]
+
+    cur_day = d
+    cursor = start_dt
+    day_remaining = DAILY_WORK_HOURS * 60.0
+    working_days: list[date] = [cur_day]
+
+    def _roll_if_needed() -> None:
+        nonlocal cur_day, cursor, day_remaining
+        if day_remaining <= 1e-9:
+            cur_day += timedelta(days=1)
+            while not is_working_day(cur_day, path):
+                cur_day += timedelta(days=1)
+            working_days.append(cur_day)
+            cursor = datetime.combine(cur_day, time(DAILY_START_HOUR))
+            day_remaining = DAILY_WORK_HOURS * 60.0
+
+    spans: list[tuple[datetime, datetime]] = []
+    for minutes in durations:
+        _roll_if_needed()
+        step_start = cursor
+        remaining = minutes
+        while remaining > 1e-9:
+            _roll_if_needed()
+            chunk = min(remaining, day_remaining)
+            cursor += timedelta(minutes=chunk)
+            day_remaining -= chunk
+            remaining -= chunk
+        spans.append((step_start, cursor))
+
+    setup_span = spans[0] if setup_hours > 0 else None
+    step_spans = spans[1:] if setup_hours > 0 else spans
+    return WorkingStepsLayout(
+        steps=step_spans,
+        start=start_dt,
+        end=cursor if spans else start_dt,
+        working_days=working_days,
+        setup_span=setup_span,
+    )
+
+
 def layout_working_window(
     start: DateLike,
     duration_hours: float,
@@ -354,29 +438,14 @@ def layout_working_window(
 
     Returns (start_dt, end_dt, working_days) where start_dt is the first working
     day at 10:00 and end_dt is the last day at 10:00 + leftover hours (<= 16:00).
+
+    Thin wrapper over layout_working_steps (a single-element step list) so the
+    aggregate window and any per-step report built from the same total effort
+    can never drift apart.
     """
-    d = _to_date(start)
-    while not is_working_day(d, path):
-        d += timedelta(days=1)
-
-    start_dt = datetime.combine(d, time(DAILY_START_HOUR))
-    remaining = max(float(duration_hours), 0.0)
-    working_days: list[date] = []
-    cur = d
-    last_end = start_dt
-
-    while True:
-        if is_working_day(cur, path):
-            working_days.append(cur)
-            day_start = datetime.combine(cur, time(DAILY_START_HOUR))
-            chunk = min(remaining, DAILY_WORK_HOURS)
-            last_end = day_start + timedelta(hours=chunk)
-            remaining -= chunk
-            if remaining <= 1e-9:
-                break
-        cur += timedelta(days=1)
-
-    return start_dt, last_end, working_days
+    layout = layout_working_steps(start, [max(float(duration_hours), 0.0) * 60.0], path=path)
+    end_dt = layout.steps[-1][1] if layout.steps else layout.start
+    return layout.start, end_dt, layout.working_days
 
 
 def next_valid_layout_start(

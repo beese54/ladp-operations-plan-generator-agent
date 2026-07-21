@@ -8,7 +8,8 @@ valves. No LLM — pure arithmetic, so the schedule end time is reproducible.
 from __future__ import annotations
 
 import math
-from typing import Any, Literal
+from dataclasses import dataclass
+from typing import Any, Literal, Optional
 
 MM_PER_INCH = 25.4
 LARGE_VALVE_MM = 500           # > 500 mm uses the slow closing tail
@@ -44,29 +45,83 @@ def operation_minutes(
     return work + (len(actions) - 1) * travel_minutes
 
 
-def chain_valve_actions(chain: dict[str, Any]) -> list[tuple[float, str]]:
-    """Map an SOP shutdown chain to its (diameter_mm, action) valve operations.
+@dataclass(frozen=True)
+class ValveStep:
+    """A single identified, timed valve action within an isolation operation."""
+    seq: int                      # 1-based order within the operation
+    valve_id: str
+    action: Action                 # "OPEN" | "CLOSE"
+    diameter_mm: float
+    pipe_id: Optional[str]         # contextual pipe this action closes/opens, if any
+    action_minutes: float
+    travel_minutes: float = 0.0    # travel consumed immediately before this step (0.0 for seq=1)
 
-    CLOSE every shutdown-chain valve (isolation); if an alternate feed exists,
-    OPEN the alternate-feed valve and one valve per reverse pair (re-feed /
-    reverse-isolation). Diameters come from chain['valve_diameters'].
+    @property
+    def total_minutes(self) -> float:
+        return self.action_minutes + self.travel_minutes
+
+
+def chain_valve_steps(
+    chain: dict[str, Any],
+    travel_minutes: float = DAILY_TRAVEL_MINUTES,
+) -> list[ValveStep]:
+    """Map an SOP shutdown chain to its per-step valve operations, with identity.
+
+    Same CLOSE-then-OPEN sequencing as chain_valve_actions (do not re-derive it
+    elsewhere — chain_valve_actions is now a thin projection of this function):
+    CLOSE every shutdown-chain valve (isolation), in order; if an alternate feed
+    exists, OPEN the alternate-feed valve, then OPEN one valve per reverse pair
+    (re-feed / reverse-isolation), keyed by `pair['from_valve']` to match the
+    engine that already sizes every real booking.
+
+    Pipe mapping for CLOSE steps: shutdown_valves[i] is paired with the pipe it
+    is the from-valve of (shutdown_pipes[i]); the tail valve (last CLOSE) has no
+    following pipe, so pipe_id=None. OPEN steps use the alt-feed/reverse-check
+    pipe_id directly from the chain data.
     """
     diam = chain.get("valve_diameters") or {}
 
     def d(vid: str) -> float:
         return diam.get(vid, _DEFAULT_DIAMETER_MM)
 
-    actions: list[tuple[float, str]] = [
-        (d(vid), "CLOSE") for vid in chain.get("shutdown_valves", [])
+    shutdown_valves = chain.get("shutdown_valves", [])
+    shutdown_pipes = chain.get("shutdown_pipes", [])
+
+    raw: list[tuple[str, Action, Optional[str]]] = [
+        (vid, "CLOSE", shutdown_pipes[i] if i < len(shutdown_pipes) else None)
+        for i, vid in enumerate(shutdown_valves)
     ]
 
     alt = chain.get("alternate_feed")
     if alt:
-        actions.append((d(alt["from_valve_id"]), "OPEN"))
+        raw.append((alt["from_valve_id"], "OPEN", alt.get("pipe_id")))
         for pair in chain.get("reverse_checks", []):
-            actions.append((d(pair["from_valve"]), "OPEN"))
+            raw.append((pair["from_valve"], "OPEN", pair.get("pipe_id")))
 
-    return actions
+    return [
+        ValveStep(
+            seq=i + 1,
+            valve_id=vid,
+            action=action,
+            diameter_mm=d(vid),
+            pipe_id=pipe_id,
+            action_minutes=valve_action_minutes(d(vid), action),
+            travel_minutes=travel_minutes if i > 0 else 0.0,
+        )
+        for i, (vid, action, pipe_id) in enumerate(raw)
+    ]
+
+
+def chain_valve_actions(chain: dict[str, Any]) -> list[tuple[float, str]]:
+    """Map an SOP shutdown chain to its (diameter_mm, action) valve operations.
+
+    CLOSE every shutdown-chain valve (isolation); if an alternate feed exists,
+    OPEN the alternate-feed valve and one valve per reverse pair (re-feed /
+    reverse-isolation). Diameters come from chain['valve_diameters'].
+
+    Thin projection of chain_valve_steps — see its docstring for the sequencing.
+    """
+    return [(s.diameter_mm, s.action) for s in chain_valve_steps(chain)]
 
 
 def operation_duration_hours(

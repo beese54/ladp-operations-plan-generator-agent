@@ -547,6 +547,7 @@ def _commit_booking(state: OrchestratorState, answer: Any, start: str, end: str)
                     f"{_fmt_dt(p['proposed_start'])} → {_fmt_dt(p['proposed_end'])}."
                 )
 
+    lines.append(f"\n📄 [Download the full isolation report (PDF)](/api/v1/operations/{op_id}/report)")
     return {"final_response": "\n".join(lines), "booked_operation_id": op_id}
 
 
@@ -636,6 +637,7 @@ def _commit_emergency_priority(state: OrchestratorState, choice, conflicts: list
             lines.append(f"↪ Rescheduled {p['operation_id']} → "
                          f"{_fmt_dt(p['proposed_start'])} → {_fmt_dt(p['proposed_end'])}.")
 
+    lines.append(f"\n📄 [Download the full isolation report (PDF)](/api/v1/operations/{op_id}/report)")
     return {"final_response": "\n".join(lines), "booked_operation_id": op_id}
 
 

@@ -83,6 +83,28 @@ def get_active_operations(
         return [dict(r) for r in conn.execute(query)]
 
 
+def get_operation(operation_id: str, db_path: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """Fetch a single scheduled operation by id, or None if not found.
+
+    Decodes valve_ids/assigned_crew JSON columns back into lists — the first
+    reader that needs them (get_active_operations/get_upcoming_operations both
+    select a narrower column list that excludes them).
+    """
+    query = "SELECT * FROM scheduled_operations WHERE operation_id = ?"
+    with get_sqlite_connection(db_path) as conn:
+        row = conn.execute(query, (operation_id,)).fetchone()
+        if row is None:
+            return None
+        op = dict(row)
+    for col in ("valve_ids", "assigned_crew"):
+        raw = op.get(col)
+        try:
+            op[col] = json.loads(raw) if raw else []
+        except (TypeError, ValueError):
+            op[col] = []
+    return op
+
+
 def create_scheduled_operation(
     title: str,
     operation_type: str,

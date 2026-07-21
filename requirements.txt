@@ -20,3 +20,5 @@ pytest-mock>=3.14.0
 pypdf>=4.0.0
 mlflow>=3.11.0
 pandas>=2.0.0
+reportlab>=4.2.0
+matplotlib>=3.8.0

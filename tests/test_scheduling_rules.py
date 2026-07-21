@@ -216,6 +216,52 @@ def test_layout_rolls_start_to_working_day():
     assert days[0] == date(2026, 6, 22)
 
 
+def test_layout_working_steps_matches_layout_working_window_total():
+    # A sequence of per-step minutes summing to 14h must land on the same
+    # final end as the lump-sum function — this equivalence is what makes
+    # layout_working_window a thin wrapper over layout_working_steps.
+    minutes = [200.0, 250.0, 390.0]  # 200+250+390 = 840 min = 14h
+    layout = sr.layout_working_steps("2026-06-15", minutes)
+    _start, end_dt, _days = sr.layout_working_window("2026-06-15", sum(minutes) / 60.0)
+    assert layout.end == end_dt
+    assert layout.start == datetime(2026, 6, 15, 10, 0)
+    assert len(layout.steps) == 3
+
+
+def test_layout_working_steps_flags_day_split_via_consumer():
+    # Day 1 has 360 min budget; a 100-min step starting with 320 min already
+    # used should straddle the boundary (80 min today, 20 min tomorrow).
+    layout = sr.layout_working_steps("2026-06-15", [320.0, 100.0])
+    first_start, first_end = layout.steps[0]
+    second_start, second_end = layout.steps[1]
+    assert first_start.date() == date(2026, 6, 15)
+    assert first_end == datetime(2026, 6, 15, 15, 20)
+    assert second_start == datetime(2026, 6, 15, 15, 20)
+    assert second_end == datetime(2026, 6, 16, 11, 0)  # 40 min today + 60 min tomorrow
+    assert second_start.date() != second_end.date()   # this step spans overnight
+
+
+def test_layout_working_steps_setup_hours_reported_separately():
+    layout = sr.layout_working_steps("2026-06-15", [60.0], setup_hours=1.0)
+    assert layout.setup_span == (datetime(2026, 6, 15, 10, 0), datetime(2026, 6, 15, 11, 0))
+    assert layout.steps == [(datetime(2026, 6, 15, 11, 0), datetime(2026, 6, 15, 12, 0))]
+    assert layout.start == datetime(2026, 6, 15, 10, 0)
+
+
+def test_layout_working_steps_skips_weekend():
+    # Mirrors test_layout_skips_weekend but per-step: two 7h-equivalent steps
+    # from Thursday should skip the weekend the same way the lump function does.
+    layout = sr.layout_working_steps("2026-06-18", [420.0, 420.0])
+    assert layout.working_days == [date(2026, 6, 18), date(2026, 6, 19), date(2026, 6, 22)]
+    assert layout.end == datetime(2026, 6, 22, 12, 0)
+
+
+def test_layout_working_steps_empty_list_is_zero_width():
+    layout = sr.layout_working_steps("2026-06-15", [])
+    assert layout.steps == []
+    assert layout.start == layout.end == datetime(2026, 6, 15, 10, 0)
+
+
 def test_next_valid_layout_start_skips_friday():
     # Friday 2026-06-19 start -> next valid working non-Friday start = Mon 06-22
     d = sr.next_valid_layout_start("2026-06-19", 2.5, [])

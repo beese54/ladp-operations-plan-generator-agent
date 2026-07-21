@@ -232,6 +232,7 @@ def test_commit_confirm_creates_operation(monkeypatch):
     assert captured["operation_class"] == "PLANNED"
     assert captured["valve_ids"] == ["v1", "v2", "v3"]
     assert captured["scheduled_start"] == "2026-07-06T10:00:00"
+    assert "/api/v1/operations/OPS-TEST123/report" in out["final_response"]
 
 
 def test_commit_cancel_writes_nothing(monkeypatch):
@@ -261,3 +262,11 @@ def test_commit_emergency_reschedules_displaced(monkeypatch):
     assert out["booked_operation_id"] == "OPS-EMERG"
     assert resched == [("op-1", "2026-07-21T10:00:00", "2026-07-21T14:00:00")]
     assert "Rescheduled op-1" in out["final_response"]
+    assert "/api/v1/operations/OPS-EMERG/report" in out["final_response"]
+
+
+def test_priority_new_first_includes_report_link(monkeypatch):
+    monkeypatch.setattr(orch, "create_scheduled_operation", lambda **kw: "OPS-PRIO1")
+    monkeypatch.setattr(orch, "reschedule_operation", lambda op, s, e: True)
+    out = orch._commit_emergency_priority(_emerg_state(), "new", _CONFLICT)
+    assert "/api/v1/operations/OPS-PRIO1/report" in out["final_response"]

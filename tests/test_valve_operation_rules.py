@@ -73,3 +73,50 @@ def test_operation_duration_hours_pipe084_shape():
     }
     # 8*32.5 + 7*20 = 400 min
     assert vor.operation_duration_hours(chain) == pytest.approx(400 / 60)
+
+
+# ── chain -> per-step identity (chain_valve_steps) ──
+def test_chain_valve_steps_matches_chain_valve_actions_no_alt():
+    chain = {"shutdown_valves": ["v1", "v2"], "valve_diameters": {"v1": 300, "v2": 700}}
+    steps = vor.chain_valve_steps(chain)
+    assert [(s.diameter_mm, s.action) for s in steps] == vor.chain_valve_actions(chain)
+
+
+def test_chain_valve_steps_matches_chain_valve_actions_with_alt():
+    chain = {
+        "shutdown_valves": ["v1", "v2"],
+        "alternate_feed": {"from_valve_id": "va", "pipe_id": "p-alt"},
+        "reverse_checks": [{"from_valve": "r1", "to_valve": "x", "pipe_id": "p-r1"},
+                           {"from_valve": "r2", "to_valve": "y", "pipe_id": "p-r2"}],
+        "valve_diameters": {k: 300 for k in ["v1", "v2", "va", "r1", "r2"]},
+    }
+    steps = vor.chain_valve_steps(chain)
+    assert [(s.diameter_mm, s.action) for s in steps] == vor.chain_valve_actions(chain)
+    assert [s.valve_id for s in steps] == ["v1", "v2", "va", "r1", "r2"]
+    assert [s.seq for s in steps] == [1, 2, 3, 4, 5]
+
+
+def test_chain_valve_steps_pipe_id_mapping():
+    chain = {
+        "shutdown_valves": ["v1", "v2", "v3"],
+        "shutdown_pipes": ["p1", "p2"],
+        "alternate_feed": {"from_valve_id": "va", "pipe_id": "p-alt"},
+        "reverse_checks": [{"from_valve": "v3", "to_valve": "v2", "pipe_id": "p-r1"}],
+        "valve_diameters": {k: 300 for k in ["v1", "v2", "v3", "va"]},
+    }
+    steps = vor.chain_valve_steps(chain)
+    by_seq = {s.seq: s for s in steps}
+    assert by_seq[1].pipe_id == "p1"      # v1 -> p1
+    assert by_seq[2].pipe_id == "p2"      # v2 -> p2
+    assert by_seq[3].pipe_id is None      # tail valve v3, no following pipe
+    assert by_seq[4].pipe_id == "p-alt"   # alt-feed OPEN
+    assert by_seq[5].pipe_id == "p-r1"    # reverse-check OPEN
+
+
+def test_chain_valve_steps_travel_minutes_zero_for_first_only():
+    chain = {"shutdown_valves": ["v1", "v2", "v3"], "valve_diameters": {"v1": 300, "v2": 300, "v3": 300}}
+    steps = vor.chain_valve_steps(chain)
+    assert steps[0].travel_minutes == 0.0
+    assert steps[1].travel_minutes == vor.DAILY_TRAVEL_MINUTES
+    assert steps[2].travel_minutes == vor.DAILY_TRAVEL_MINUTES
+    assert steps[0].total_minutes == steps[0].action_minutes
