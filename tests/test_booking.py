@@ -88,6 +88,31 @@ def test_route_requires_end_date_mode_for_planned_only():
     assert orch.route_after_intent({**base, "operation_class": "EMERGENCY"}) == "neo4j_agent"
 
 
+def test_route_schedule_query_goes_to_schedule_query_node():
+    assert orch.route_after_intent({"operation_type": "SCHEDULE_QUERY"}) == "schedule_query"
+    # Takes priority even if other slots happen to be set.
+    assert orch.route_after_intent(
+        {"operation_type": "SCHEDULE_QUERY", "target_date": "2026-11-01"}) == "schedule_query"
+
+
+# ── schedule query node (read-only "what's scheduled this month") ──
+def test_schedule_query_node_uses_stated_month(monkeypatch):
+    ops = [{"operation_id": "OPS-NOV", "pipe_id": "pipe_020",
+            "scheduled_start": "2026-11-05T08:00:00", "scheduled_end": "2026-11-06T16:00:00"}]
+    monkeypatch.setattr(orch, "get_active_operations", lambda: ops)
+    out = orch.schedule_query_node({"operation_type": "SCHEDULE_QUERY", "target_date": "2026-11-01"})
+    assert "Operation plans that are already scheduled in November 2026" in out["final_response"]
+    assert "OPS-NOV" in out["final_response"]
+    assert out["agents_completed"] == ["schedule_query"]
+
+
+def test_schedule_query_node_defaults_to_current_month_when_no_date(monkeypatch):
+    monkeypatch.setattr(orch, "get_active_operations", lambda: [])
+    out = orch.schedule_query_node({"operation_type": "SCHEDULE_QUERY"})
+    this_month_label = datetime.now().strftime("%B %Y")
+    assert this_month_label in out["final_response"]
+
+
 def test_clarification_far_date_asks_neutral_class():
     far = (datetime.now().date() + timedelta(days=10)).isoformat()
     slot, q = orch._next_clarification_slot({"pipe_id": "pipe_084", "target_date": far})

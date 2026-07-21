@@ -38,7 +38,7 @@ _INTENT_SYSTEM = """You are an intent classifier for a water network operations 
 Classify the user's message and extract relevant fields.
 Return ONLY a JSON object:
 {
-  "operation_type": "SHUTDOWN" | "INSPECTION" | "MAINTENANCE" | "GENERAL_QUERY" | "UNKNOWN",
+  "operation_type": "SHUTDOWN" | "INSPECTION" | "MAINTENANCE" | "SCHEDULE_QUERY" | "GENERAL_QUERY" | "UNKNOWN",
   "pipe_id": "<pipe ID string or null>",
   "target_date": "<ISO date YYYY-MM-DD or null>",
   "target_end_date": "<ISO date YYYY-MM-DD or null>",
@@ -48,11 +48,18 @@ Return ONLY a JSON object:
 }
 Rules:
 - SHUTDOWN/INSPECTION/MAINTENANCE: user wants to perform a network operation on a specific pipe.
-- GENERAL_QUERY: user is asking a question about the network, SOPs, schedules, or system without requesting a new operation.
+- SCHEDULE_QUERY: user wants to see/list/review operations already on the calendar for a month
+  or date (e.g. "show me the operations plans for November 2026", "what's scheduled next
+  month", "list planned jobs for Nov 2026", "any clashes in December?") — a read-only look at
+  the schedule, not a request to create or perform a new operation.
+- GENERAL_QUERY: user is asking a question about the network, SOPs, or system without
+  requesting a new operation or a schedule listing.
 - UNKNOWN: message is off-topic or ambiguous.
 - Extract pipe_id exactly as stated (e.g. "pipe_151", "P-001").
-- target_date is the requested START date of the operation. Do NOT extract any time
-  of day.
+- target_date is the requested START date of the operation (SHUTDOWN/INSPECTION/MAINTENANCE),
+  or the month/date being asked about (SCHEDULE_QUERY). For a bare month/year mention (e.g.
+  "November 2026", "next month"), use the 1st of that month, e.g. "2026-11-01". Do NOT extract
+  any time of day.
 - target_end_date is the operator's intended END date — when the pipe should be back
   in service (e.g. "from 17 to 20 August", "until 20-08-26", "back in service by
   25 August", "ends on the 20th"). When one is stated, set end_date_mode to "USER".
@@ -255,6 +262,23 @@ def _month_schedule_preview(target_date: str | None) -> str:
         rows.append(f"| {o.get('operation_id', '')} | `{o.get('pipe_id', '')}` | "
                     f"{_fmt_dt(o.get('scheduled_start'))} → {_fmt_dt(o.get('scheduled_end'))} |")
     return f"📅 **Operation plans that are already scheduled in {label}:**\n\n" + "\n".join(rows)
+
+
+# ─── Node: Schedule Query (read-only "what's on the calendar for month X") ───
+@mlflow.trace(name="schedule_query", span_type=SpanType.AGENT)
+def schedule_query_node(state: OrchestratorState) -> dict:
+    """Answer a schedule-listing question directly from the calendar, instead of
+    falling through to the tool-less general_response LLM (which has no access
+    to live bookings and can only ask the user to paste the schedule in).
+    No month/date stated -> default to the current month, matching how a
+    calendar view naturally defaults to "now" rather than asking a clarifying
+    question for a read-only look.
+    """
+    target_date = state.get("target_date") or datetime.now().date().isoformat()
+    preview = _month_schedule_preview(target_date)
+    if not preview:
+        preview = "I couldn't read the schedule for that period — please try again."
+    return {"final_response": preview, "agents_completed": ["schedule_query"]}
 
 
 @mlflow.trace(name="clarification", span_type=SpanType.AGENT)
@@ -683,6 +707,9 @@ def error_handler_node(state: OrchestratorState) -> dict:
 def route_after_intent(state: OrchestratorState) -> str:
     op_type = state.get("operation_type", "UNKNOWN")
 
+    if op_type == "SCHEDULE_QUERY":
+        return "schedule_query"
+
     if op_type in ("GENERAL_QUERY", "UNKNOWN"):
         return "general_response"
 
@@ -744,6 +771,7 @@ def build_orchestrator_graph(checkpointer=None):
 
     graph.add_node("intent_parser",         intent_parser_node)
     graph.add_node("general_response",      general_response_node)
+    graph.add_node("schedule_query",        schedule_query_node)
     graph.add_node("clarification",         clarification_node)
     graph.add_node("calendar_agent",        calendar_agent_node)
     graph.add_node("neo4j_agent",           neo4j_agent_node)
@@ -759,7 +787,7 @@ def build_orchestrator_graph(checkpointer=None):
     graph.add_conditional_edges(
         "intent_parser",
         route_after_intent,
-        ["general_response", "clarification", "neo4j_agent"],
+        ["general_response", "schedule_query", "clarification", "neo4j_agent"],
     )
 
     # Clarification loops back to intent parser to re-parse the updated query
@@ -792,6 +820,7 @@ def build_orchestrator_graph(checkpointer=None):
     graph.add_edge("booking_gate",          END)
 
     graph.add_edge("general_response",      END)
+    graph.add_edge("schedule_query",        END)
     graph.add_edge("error_handler",         END)
 
     return graph.compile(checkpointer=checkpointer or _default_checkpointer())
