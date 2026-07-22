@@ -78,6 +78,24 @@ Rules:
   Interpret short numeric dates day-first and still output ISO YYYY-MM-DD.
 Return ONLY the JSON object."""
 
+# Casual pipe references ("pipe 67", "Pipe67", "shut down 67") are normalized
+# to the canonical `pipe_NNN` key deterministically, rather than relying on the
+# LLM to get zero-padding/underscore formatting right — the LLM only needs to
+# find the number, not format it.
+_PIPE_ID_WORD_RE = re.compile(r"pipe[\s_-]*0*(\d+)\b", re.IGNORECASE)
+_PIPE_ID_BARE_NUM_RE = re.compile(r"^0*(\d+)$")
+
+
+def _normalize_pipe_id(raw: str | None) -> str | None:
+    if not raw:
+        return raw
+    text = raw.strip()
+    match = _PIPE_ID_WORD_RE.search(text) or _PIPE_ID_BARE_NUM_RE.match(text)
+    if not match:
+        return raw
+    return f"pipe_{int(match.group(1)):03d}"
+
+
 _GENERAL_SYSTEM = """You are a water network operations assistant.
 You help operators with questions about the water network, SOPs, scheduling, and operations.
 Answer helpfully and concisely using your knowledge. If asked about specific real-time data
@@ -133,7 +151,7 @@ def intent_parser_node(state: OrchestratorState) -> dict:
         end_mode = end_mode.upper()
 
     return {
-        "pipe_id": parsed.get("pipe_id") or state.get("pipe_id"),
+        "pipe_id": _normalize_pipe_id(parsed.get("pipe_id")) or state.get("pipe_id"),
         "target_date": parsed.get("target_date") or state.get("target_date"),
         "target_end_date": parsed.get("target_end_date") or state.get("target_end_date"),
         "end_date_mode": end_mode,
