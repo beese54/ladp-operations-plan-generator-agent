@@ -113,6 +113,35 @@ def test_schedule_query_node_defaults_to_current_month_when_no_date(monkeypatch)
     assert this_month_label in out["final_response"]
 
 
+def test_schedule_query_node_spans_a_multi_month_range(monkeypatch):
+    ops = [
+        {"operation_id": "OPS-AUG", "pipe_id": "pipe_020",
+         "scheduled_start": "2026-08-05T08:00:00", "scheduled_end": "2026-08-06T16:00:00"},
+        {"operation_id": "OPS-OCT", "pipe_id": "pipe_030",
+         "scheduled_start": "2026-10-12T08:00:00", "scheduled_end": "2026-10-12T16:00:00"},
+        {"operation_id": "OPS-DEC", "pipe_id": "pipe_040",  # outside the range
+         "scheduled_start": "2026-12-01T08:00:00", "scheduled_end": "2026-12-01T16:00:00"},
+    ]
+    monkeypatch.setattr(orch, "get_active_operations", lambda: ops)
+    out = orch.schedule_query_node({
+        "operation_type": "SCHEDULE_QUERY",
+        "target_date": "2026-08-01", "target_end_date": "2026-11-01",
+    })
+    assert "scheduled between August 2026 and November 2026" in out["final_response"]
+    assert "OPS-AUG" in out["final_response"]
+    assert "OPS-OCT" in out["final_response"]
+    assert "OPS-DEC" not in out["final_response"]
+
+
+def test_schedule_query_node_same_month_range_uses_single_month_wording(monkeypatch):
+    monkeypatch.setattr(orch, "get_active_operations", lambda: [])
+    out = orch.schedule_query_node({
+        "operation_type": "SCHEDULE_QUERY",
+        "target_date": "2026-08-01", "target_end_date": "2026-08-01",
+    })
+    assert "Nothing else is scheduled in **August 2026**" in out["final_response"]
+
+
 def test_clarification_far_date_asks_neutral_class():
     far = (datetime.now().date() + timedelta(days=10)).isoformat()
     slot, q = orch._next_clarification_slot({"pipe_id": "pipe_084", "target_date": far})

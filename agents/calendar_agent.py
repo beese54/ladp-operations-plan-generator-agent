@@ -83,6 +83,40 @@ def _operations_in_month(existing: list[dict], ref_date: str,
     return out
 
 
+def _operations_in_range(existing: list[dict], start_date: str, end_date: str) -> list[dict]:
+    """Active operations whose window touches [start_date, end_date], truncated
+    to whole months (start's month through end's month, inclusive) — the
+    multi-month counterpart to `_operations_in_month`, used for schedule-query
+    ranges like "August to November 2026" rather than a single-month lookup."""
+    try:
+        start = datetime.fromisoformat(start_date)
+        end = datetime.fromisoformat(end_date)
+    except (ValueError, TypeError):
+        return []
+    if end < start:
+        start, end = end, start
+    range_start = datetime(start.year, start.month, 1)
+    nm = (end.year + 1, 1) if end.month == 12 else (end.year, end.month + 1)
+    range_end = datetime(nm[0], nm[1], 1)  # exclusive upper bound
+
+    out = []
+    for op in existing:
+        try:
+            s = datetime.fromisoformat(op["scheduled_start"])
+            e = datetime.fromisoformat(op["scheduled_end"])
+        except (ValueError, TypeError, KeyError):
+            continue
+        if s < range_end and e >= range_start:  # touches the range
+            out.append({
+                "operation_id": op.get("operation_id", ""),
+                "title": op.get("title", ""),
+                "pipe_id": op.get("pipe_id", ""),
+                "scheduled_start": op["scheduled_start"],
+                "scheduled_end": op["scheduled_end"],
+            })
+    return out
+
+
 def calendar_agent_node(state: OrchestratorState) -> dict:
     pipe_id = state.get("pipe_id", "")
     target_date = state.get("target_date", "")

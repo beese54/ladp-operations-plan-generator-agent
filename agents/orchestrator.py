@@ -15,7 +15,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from config.settings import get_settings, get_azure_openai_client, get_together_client
 from schemas.graph_state import OrchestratorState
-from agents.calendar_agent import calendar_agent_node, _operations_in_month
+from agents.calendar_agent import calendar_agent_node, _operations_in_month, _operations_in_range
 from agents.neo4j_agent import neo4j_agent_node
 from agents.sop_agent import sop_agent_node
 from agents.historical_agent import historical_agent_node
@@ -57,12 +57,16 @@ Rules:
 - UNKNOWN: message is off-topic or ambiguous.
 - Extract pipe_id exactly as stated (e.g. "pipe_151", "P-001").
 - target_date is the requested START date of the operation (SHUTDOWN/INSPECTION/MAINTENANCE),
-  or the month/date being asked about (SCHEDULE_QUERY). For a bare month/year mention (e.g.
-  "November 2026", "next month"), use the 1st of that month, e.g. "2026-11-01". Do NOT extract
-  any time of day.
-- target_end_date is the operator's intended END date — when the pipe should be back
-  in service (e.g. "from 17 to 20 August", "until 20-08-26", "back in service by
-  25 August", "ends on the 20th"). When one is stated, set end_date_mode to "USER".
+  or the start of the period being asked about (SCHEDULE_QUERY). For a bare month/year mention
+  (e.g. "November 2026", "next month"), use the 1st of that month, e.g. "2026-11-01". Do NOT
+  extract any time of day.
+- target_end_date is the operator's intended END date for SHUTDOWN/INSPECTION/MAINTENANCE —
+  when the pipe should be back in service (e.g. "from 17 to 20 August", "until 20-08-26", "back
+  in service by 25 August", "ends on the 20th"). When one is stated, set end_date_mode to "USER".
+  For SCHEDULE_QUERY, set target_end_date instead when the user asks for a range spanning more
+  than one month (e.g. "August to November 2026", "between June and September 2026", "Q1 2026"
+  -> target_date="2026-01-01", target_end_date="2026-03-01") — use the 1st of the end month,
+  same rule as target_date. Leave target_end_date null for a single month/date query.
 - end_date_mode is "AUTO" when the operator defers the end date to the system
   ("plan it for me", "you decide", "estimate it", "however long it takes",
   "no end date"); "USER" when target_end_date is given; otherwise null.
@@ -264,6 +268,39 @@ def _month_schedule_preview(target_date: str | None) -> str:
     return f"📅 **Operation plans that are already scheduled in {label}:**\n\n" + "\n".join(rows)
 
 
+def _schedule_range_preview(target_date: str | None, target_end_date: str | None) -> str:
+    """A look at what's already booked across a date range. Falls back to the
+    single-month preview when no end date is given, or the end date lands in
+    the same month as the start — so the existing single-month wording/tests
+    are unaffected and only genuine multi-month ranges take the range path."""
+    if not target_end_date:
+        return _month_schedule_preview(target_date)
+    try:
+        start = datetime.fromisoformat(target_date)
+        end = datetime.fromisoformat(target_end_date)
+    except (ValueError, TypeError):
+        return _month_schedule_preview(target_date)
+    if (start.year, start.month) == (end.year, end.month):
+        return _month_schedule_preview(target_date)
+
+    start_label = start.strftime("%B %Y")
+    end_label = end.strftime("%B %Y")
+    try:
+        ops = _operations_in_range(get_active_operations(), target_date, target_end_date)
+    except Exception as e:
+        logger.warning("Could not load range schedule preview: %s", e)
+        return ""
+    if not ops:
+        return (f"📅 Nothing is scheduled between **{start_label}** and **{end_label}** "
+                 "— the calendar is clear.")
+    rows = ["| Operation | Pipe | When |", "|-----------|------|------|"]
+    for o in sorted(ops, key=lambda x: x.get("scheduled_start", "")):
+        rows.append(f"| {o.get('operation_id', '')} | `{o.get('pipe_id', '')}` | "
+                    f"{_fmt_dt(o.get('scheduled_start'))} → {_fmt_dt(o.get('scheduled_end'))} |")
+    return (f"📅 **Operation plans scheduled between {start_label} and {end_label}:**\n\n"
+            + "\n".join(rows))
+
+
 # ─── Node: Schedule Query (read-only "what's on the calendar for month X") ───
 @mlflow.trace(name="schedule_query", span_type=SpanType.AGENT)
 def schedule_query_node(state: OrchestratorState) -> dict:
@@ -275,7 +312,7 @@ def schedule_query_node(state: OrchestratorState) -> dict:
     question for a read-only look.
     """
     target_date = state.get("target_date") or datetime.now().date().isoformat()
-    preview = _month_schedule_preview(target_date)
+    preview = _schedule_range_preview(target_date, state.get("target_end_date"))
     if not preview:
         preview = "I couldn't read the schedule for that period — please try again."
     return {"final_response": preview, "agents_completed": ["schedule_query"]}

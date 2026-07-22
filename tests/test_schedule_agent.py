@@ -183,6 +183,28 @@ def test_operations_in_month_filters_and_flags_clash():
     assert flags["B"] is False          # same month, no overlap
 
 
+def test_operations_in_range_spans_multiple_months():
+    existing = [
+        {"operation_id": "A", "pipe_id": "pipe_001",  # July — before the range
+         "scheduled_start": "2026-07-20T10:00:00", "scheduled_end": "2026-07-20T16:00:00"},
+        {"operation_id": "B", "pipe_id": "pipe_002",  # August — inside the range
+         "scheduled_start": "2026-08-03T10:00:00", "scheduled_end": "2026-08-03T16:00:00"},
+        {"operation_id": "C", "pipe_id": "pipe_003",  # October — inside the range
+         "scheduled_start": "2026-10-12T10:00:00", "scheduled_end": "2026-10-12T16:00:00"},
+        {"operation_id": "D", "pipe_id": "pipe_004",  # December — after the range
+         "scheduled_start": "2026-12-01T10:00:00", "scheduled_end": "2026-12-01T16:00:00"},
+    ]
+    res = calendar_agent._operations_in_range(existing, "2026-08-01", "2026-11-01")
+    assert {o["operation_id"] for o in res} == {"B", "C"}
+
+
+def test_operations_in_range_handles_reversed_dates():
+    existing = [{"operation_id": "B", "pipe_id": "pipe_002",
+                 "scheduled_start": "2026-08-03T10:00:00", "scheduled_end": "2026-08-03T16:00:00"}]
+    res = calendar_agent._operations_in_range(existing, "2026-11-01", "2026-08-01")
+    assert {o["operation_id"] for o in res} == {"B"}
+
+
 def test_month_operations_empty_when_no_other_ops(no_db):
     out = calendar_agent.calendar_agent_node(_state("2026-06-17", valves=2))
     assert out["calendar_context"]["month_operations"] == []
