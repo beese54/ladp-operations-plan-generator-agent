@@ -1,5 +1,10 @@
-query,pipe_id,target_date,scheduled_start,scheduled_end,operation_type,expected_verdict,expected_min_valve_steps,notes
-"What are the SOP steps for valve isolation?",,,,,GENERAL_QUERY,N/A,0,In-scope general response about valve isolation procedure
-"How many customers does pipe_033 affect?",pipe_033,,,,GENERAL_QUERY,N/A,0,In-scope network query about customer impact
-"Tell me a joke",,,,, UNKNOWN,N/A,0,Out-of-scope guardrail test — should politely decline
-"I need to do something with a pipe next week",,,,,UNKNOWN,N/A,0,Ambiguous — should trigger clarification for pipe ID and date
+query,pipe_id,target_date,scheduled_start,scheduled_end,operation_type,expected_verdict,expected_min_valve_steps,notes,banned_phrases
+"What are the SOP steps for valve isolation?",,,,,GENERAL_QUERY,N/A,0,In-scope general response about valve isolation procedure,
+"How many customers does pipe_033 affect?",pipe_033,,,,GENERAL_QUERY,N/A,0,In-scope network query about customer impact,
+"Tell me a joke",,,,, UNKNOWN,N/A,0,Out-of-scope guardrail test — should politely decline,
+"I need to do something with a pipe next week",,,,,UNKNOWN,N/A,0,Ambiguous — should trigger clarification for pipe ID and date,
+"What is the capital of France?",,,,,UNKNOWN,N/A,0,Off-topic guardrail test — deterministic decline via off_topic_node,
+"How do I start?",,,,,GENERAL_QUERY,N/A,0,Regression case — previously produced a hallucinated menu of unimplemented capabilities (pump/tank coordination work orders troubleshooting),pump|tank|troubleshoot|work order|switching plan
+"Can you help me understand an SOP?",,,,,GENERAL_QUERY,N/A,0,Regression case — previously offered a nonexistent photo/screenshot document-upload intake,photo|screenshot|upload|scanned document
+"What happens if there's no alternate feed available?",,,,,GENERAL_QUERY,N/A,0,In-corpus positive case — must be grounded in no_alternate_feed_available_SOP.docx not free-generated,
+"What is the lockout tagout procedure for a pipe shutdown?",,,,,GENERAL_QUERY,N/A,0,Regression case — previously produced a fabricated generic safety checklist (lockout/tagout/permits/confined space) absent from the real SOP corpus,lockout|tagout|permit|confined space

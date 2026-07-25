@@ -22,6 +22,7 @@ from agents.historical_agent import historical_agent_node
 from agents.ops_plan_generator import ops_plan_generator_node
 from prompts.sop_walkthrough_prompt import format_sop_walkthrough_table
 from tools.calendar_tools import create_scheduled_operation, reschedule_operation, get_active_operations
+from tools.chroma_tools import search_sop_documents
 from tools import scheduling_rules as sr
 from tools import valve_operation_rules as vor
 
@@ -96,15 +97,185 @@ def _normalize_pipe_id(raw: str | None) -> str | None:
     return f"pipe_{int(match.group(1)):03d}"
 
 
-_GENERAL_SYSTEM = """You are a water network operations assistant.
-You help operators with questions about the water network, SOPs, scheduling, and operations.
-Answer helpfully and concisely using your knowledge. If asked about specific real-time data
-(e.g. current pressure values, live valve status), note that they should query the network directly.
+_OFF_TOPIC_DECLINE = (
+    "I'm a water network operations assistant and can only help with "
+    "topics related to water network management, SOPs, and operations planning."
+)
 
-SCOPE: Water utility operations only. If asked about anything unrelated to water network management,
-politely decline and redirect: "I'm a water network operations assistant and can only help with
-topics related to water network management, SOPs, and operations planning."
+# Closed capability list. The model is only ever routed here for GENERAL_QUERY
+# (in-scope, non-operation) messages — UNKNOWN/off-topic is handled deterministically
+# by off_topic_node below with no LLM call. Enumerating the exact three real
+# capabilities (and explicitly banning invented ones) exists because this prompt
+# used to say "answer helpfully using your knowledge," which let the model
+# improvise features that don't exist anywhere in this codebase (photo/document
+# upload, pump/tank coordination, work orders, troubleshooting-as-a-service).
+_GENERAL_SYSTEM = """You are a water network operations assistant.
+
+You are only ever asked meta/help questions here (e.g. "how do I start?", "what can you
+do?") — never SOP, safety, or network-topology content questions; those are answered
+elsewhere from the real documented SOP corpus, not from your own knowledge. Explain
+exactly these THREE capabilities and nothing else:
+1. Generate a SHUTDOWN / INSPECTION / MAINTENANCE operations plan for a specific pipe
+   on a specific date. If the user wants this, ask for the pipe ID and date.
+2. Answer read-only questions about what is already booked on the operations calendar.
+3. Answer questions about water network SOPs, safety procedures, and topology, grounded
+   in the documented corpus. Tell the user they can just ask their specific question.
+
+Hard rules:
+- You do NOT accept photos, screenshots, scanned documents, or file uploads of any kind.
+  You have no image or document intake — if asked, say so plainly.
+- You do NOT coordinate pump or tank operations, prepare work orders or switching plans,
+  or provide troubleshooting/diagnostics as a standalone service. These are not
+  implemented. Do not offer them as options, even as a suggestion.
+- If asked about specific real-time data (current pressure values, live valve status),
+  say they should query the network directly — do not fabricate a value.
+- If a request falls outside the three capabilities above, say plainly that it isn't
+  supported and point to whichever of the three capabilities is the closest fit. Do not
+  invent a fourth option.
+
+SCOPE: Water utility operations only. If the request is unrelated to water network
+management, decline with exactly: "I'm a water network operations assistant and can
+only help with topics related to water network management, SOPs, and operations
+planning."
 """
+
+# Phrases that indicate the model claimed a capability this system doesn't have.
+# Backstop for _GENERAL_SYSTEM above — a prompt instruction is not a guarantee,
+# so the actual output is checked before it reaches the user. "pump"/"tank" +
+# "coordinat" are matched in EITHER order since "coordinate a pump operation"
+# and "pump coordination" both occur in practice.
+_BANNED_CAPABILITY_RE = re.compile(
+    r"photo|screenshot|scanned? document|upload|work order|switching plan|"
+    r"troubleshoot|"
+    r"(pump|tank)\b[^.\n]{0,25}\bcoordinat|coordinat\w*[^.\n]{0,25}\b(pump|tank)",
+    re.IGNORECASE,
+)
+
+# A banned-phrase hit right after a negation ("can't", "don't", "no ...") means
+# the model is correctly DISCLAIMING that capability, not claiming it — e.g.
+# "I can't read uploaded documents" must not be treated as a hallucination.
+# LLM output commonly uses a typographic apostrophe (’, U+2019) rather than a
+# straight one ('), so contractions are matched via either.
+_NEGATION_RE = re.compile(
+    r"\b(no|not|cannot|without|unable to)\b|n['’]t\b", re.IGNORECASE
+)
+
+
+def _claims_banned_capability(text: str) -> bool:
+    for m in _BANNED_CAPABILITY_RE.finditer(text):
+        preceding = text[max(0, m.start() - 30):m.start()]
+        if not _NEGATION_RE.search(preceding):
+            return True
+    return False
+
+
+# ─── SOP-grounded answers (content-hallucination guardrail) ──────────────────
+# A general question about the water network's SOPs/safety/topology must be
+# answered from the real, ingested corpus (ChromaDB, via search_sop_documents —
+# the same tool sop_agent uses), never from the model's own pretrained
+# knowledge. Free-generating here produced a confirmed hallucination: asked
+# "what is the SOP guidance," the model returned a generic
+# lockout/tagout/permit/confined-space checklist that appears nowhere in this
+# project's actual SOP documents.
+#
+# Grounded retrieval is the DEFAULT for general_response_node — a hand-picked
+# allow-list of "SOP-ish" keywords was tried first and missed genuine content
+# questions phrased without those exact words (e.g. "what happens if there's
+# no alternate feed available?" doesn't contain "sop"/"procedure"/etc. but is
+# directly answered by the real corpus). Only genuine meta/help questions
+# about the assistant itself are carved out to the capability-list prompt.
+_META_HELP_PATTERNS = (
+    "how do i start", "how do you start", "how does this work",
+    "how do i use", "getting started", "get started",
+    "what can you do", "what can you help", "who are you", "what are you",
+)
+
+_SOP_GROUNDED_SYSTEM = """You are answering a question about water network SOPs using
+ONLY the SOP excerpts provided below. These excerpts are the complete documented
+procedure available — there is nothing else to draw on.
+
+Rules:
+- Answer using only what the excerpts actually say. Do not add outside knowledge,
+  generic industry practice, or anything not present in the excerpts — even if it
+  sounds plausible or standard.
+- If the excerpts don't address the question, say plainly that it isn't part of the
+  documented procedure. Do not fill the gap with a guess.
+- Be concise and direct.
+
+SOP EXCERPTS:
+{excerpts}
+"""
+
+_NO_SOP_MATCH_FALLBACK = (
+    "I don't have general SOP guidance stored beyond the pipe-isolation procedure "
+    "— ask about a specific pipe shutdown and I can walk you through the real steps."
+)
+
+# Generic safety-process vocabulary that is known to be ABSENT from this project's
+# real SOP corpus (it's entirely about valve-graph traversal, reverse-isolation
+# sequencing, resident notification, and valve timing — never these terms). A
+# similarity-score threshold doesn't reliably separate relevant from irrelevant
+# retrievals in this small, narrow corpus (empirically: an off-corpus query like
+# "lockout tagout procedure" scores nearly as high as genuinely relevant ones), so
+# this checks the SYNTHESIZED ANSWER's vocabulary against the retrieved source text
+# instead — if the answer uses a term the retrieved chunks never used, it was added
+# by the model, not sourced from the documents.
+_GENERIC_SAFETY_BOILERPLATE_RE = re.compile(
+    r"lockout|tagout|\bpermit\b|confined space|\bppe\b|traffic control",
+    re.IGNORECASE,
+)
+
+
+def _is_meta_help_question(message: str) -> bool:
+    m = (message or "").lower()
+    return any(p in m for p in _META_HELP_PATTERNS)
+
+
+def _answer_is_grounded(answer: str, chunk_texts: list[str]) -> bool:
+    """False if the answer uses generic safety boilerplate that never appears in
+    the retrieved source chunks — a sign the model padded beyond the real corpus."""
+    combined_source = " ".join(chunk_texts).lower()
+    for m in _GENERIC_SAFETY_BOILERPLATE_RE.finditer(answer):
+        term = m.group(0).lower()
+        if term not in combined_source:
+            return False
+    return True
+
+
+def _sop_grounded_answer(user_query: str) -> str:
+    chunks = search_sop_documents(user_query, n_results=5)
+    if not chunks:
+        return _NO_SOP_MATCH_FALLBACK
+
+    excerpts = "\n\n---\n\n".join(c["text"] for c in chunks)
+    s = get_settings()
+    provider = s.agent_providers.get("general_response", "azure")
+    client = get_azure_openai_client() if provider == "azure" else get_together_client()
+    model = s.azure_openai_chat_deployment_name if provider == "azure" else s.together_model
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _SOP_GROUNDED_SYSTEM.format(excerpts=excerpts)},
+                {"role": "user", "content": user_query},
+            ],
+            max_completion_tokens=1024,
+            temperature=0.2,
+        )
+        answer = response.choices[0].message.content or ""
+    except Exception as e:
+        logger.error("SOP-grounded answer error: %s", e)
+        return _NO_SOP_MATCH_FALLBACK
+
+    if not _answer_is_grounded(answer, [c["text"] for c in chunks]):
+        logger.warning(
+            "SOP-grounded answer used vocabulary absent from the retrieved chunks "
+            "for query %r — replacing with the honest fallback. Raw answer: %r",
+            user_query, answer,
+        )
+        return _NO_SOP_MATCH_FALLBACK
+
+    return answer
 
 
 # ─── Node: Intent Parser ──────────────────────────────────────────────────────
@@ -168,36 +339,67 @@ def intent_parser_node(state: OrchestratorState) -> dict:
 # ─── Node: General Response ───────────────────────────────────────────────────
 @mlflow.trace(name="general_response", span_type=SpanType.AGENT)
 def general_response_node(state: OrchestratorState) -> dict:
-    s = get_settings()
     user_query = state.get("user_query_raw", "")
 
-    # Guardrail: check if in scope
-    query_lower = user_query.lower()
-    in_scope = any(topic in query_lower for topic in _IN_SCOPE_TOPICS)
+    # Default to grounded retrieval from the real ingested corpus — never the
+    # model's own pretrained knowledge (see _sop_grounded_answer). Only genuine
+    # meta/help questions about the assistant itself get the capability-list path.
+    if _is_meta_help_question(user_query):
+        s = get_settings()
+        query_lower = user_query.lower()
+        in_scope = any(topic in query_lower for topic in _IN_SCOPE_TOPICS)
 
-    provider = s.agent_providers.get("general_response", "azure")
-    try:
-        client = get_azure_openai_client() if provider == "azure" else get_together_client()
-        model = s.azure_openai_chat_deployment_name if provider == "azure" else s.together_model
-        msgs = [{"role": "system", "content": _GENERAL_SYSTEM}]
-        if in_scope:
-            for m in state.get("messages", [])[-6:]:  # last 3 turns
-                msgs.append({"role": m.get("role", "user"), "content": m.get("content", "")})
-        msgs.append({"role": "user", "content": user_query})
-        response = client.chat.completions.create(
-            model=model,
-            messages=msgs,
-            max_completion_tokens=1024,
-            temperature=0.3,
+        provider = s.agent_providers.get("general_response", "azure")
+        try:
+            client = get_azure_openai_client() if provider == "azure" else get_together_client()
+            model = s.azure_openai_chat_deployment_name if provider == "azure" else s.together_model
+            msgs = [{"role": "system", "content": _GENERAL_SYSTEM}]
+            if in_scope:
+                for m in state.get("messages", [])[-6:]:  # last 3 turns
+                    msgs.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+            msgs.append({"role": "user", "content": user_query})
+            response = client.chat.completions.create(
+                model=model,
+                messages=msgs,
+                max_completion_tokens=1024,
+                temperature=0.3,
+            )
+            answer = response.choices[0].message.content or ""
+        except Exception as e:
+            logger.error("General response error: %s", e)
+            answer = "I'm sorry, I encountered an error. Please try again."
+    else:
+        answer = _sop_grounded_answer(user_query)
+
+    if _claims_banned_capability(answer):
+        logger.warning(
+            "general_response emitted a hallucinated-capability phrase for query %r "
+            "— replacing with the safe capability redirect. Raw answer: %r",
+            user_query, answer,
         )
-        answer = response.choices[0].message.content or ""
-    except Exception as e:
-        logger.error("General response error: %s", e)
-        answer = "I'm sorry, I encountered an error. Please try again."
+        answer = (
+            "I can't do that — here's what I can actually help with: generate a "
+            "shutdown/inspection/maintenance plan for a specific pipe and date, "
+            "answer read-only questions about the operations calendar, or answer "
+            "general questions about water network SOPs and safety principles (text only)."
+        )
 
     return {
         "final_response": answer,
         "agents_completed": ["general_response"],
+    }
+
+
+# ─── Node: Off-Topic (deterministic, no LLM call) ─────────────────────────────
+# Split out from general_response so a fully off-topic message ("what's the
+# capital of france") gets the exact same decline every time, with zero risk
+# of the model drifting into an improvised "helpful" tangent — and without
+# paying for an LLM round-trip.
+@mlflow.trace(name="off_topic", span_type=SpanType.AGENT)
+def off_topic_node(state: OrchestratorState) -> dict:
+    return {
+        "final_response": _OFF_TOPIC_DECLINE,
+        "agents_completed": ["off_topic"],
     }
 
 
@@ -765,7 +967,10 @@ def route_after_intent(state: OrchestratorState) -> str:
     if op_type == "SCHEDULE_QUERY":
         return "schedule_query"
 
-    if op_type in ("GENERAL_QUERY", "UNKNOWN"):
+    if op_type == "UNKNOWN":
+        return "off_topic"
+
+    if op_type == "GENERAL_QUERY":
         return "general_response"
 
     # OPS query — require pipe, start date, and planned/emergency before proceeding.
@@ -826,6 +1031,7 @@ def build_orchestrator_graph(checkpointer=None):
 
     graph.add_node("intent_parser",         intent_parser_node)
     graph.add_node("general_response",      general_response_node)
+    graph.add_node("off_topic",             off_topic_node)
     graph.add_node("schedule_query",        schedule_query_node)
     graph.add_node("clarification",         clarification_node)
     graph.add_node("calendar_agent",        calendar_agent_node)
@@ -842,7 +1048,7 @@ def build_orchestrator_graph(checkpointer=None):
     graph.add_conditional_edges(
         "intent_parser",
         route_after_intent,
-        ["general_response", "schedule_query", "clarification", "neo4j_agent"],
+        ["general_response", "off_topic", "schedule_query", "clarification", "neo4j_agent"],
     )
 
     # Clarification loops back to intent parser to re-parse the updated query
@@ -875,6 +1081,7 @@ def build_orchestrator_graph(checkpointer=None):
     graph.add_edge("booking_gate",          END)
 
     graph.add_edge("general_response",      END)
+    graph.add_edge("off_topic",             END)
     graph.add_edge("schedule_query",        END)
     graph.add_edge("error_handler",         END)
 
@@ -937,16 +1144,16 @@ def invoke_graph(user_message: str, session_id: str | None = None) -> dict[str, 
 
     # Serve the stored step-by-step isolation walkthrough on request. Read-only:
     # it does not start a new operation or disturb a pending interrupt, so a later
-    # "confirm" still resumes a paused booking.
+    # "confirm" still resumes a paused booking. Only short-circuits when there's
+    # actually a chain to show — a general SOP question with no stored operation
+    # (e.g. "what is the SOP guidance") falls through to the normal graph instead
+    # of getting a guessed, misleading "ask about a pipe shutdown first" reply.
     if _is_steps_request(user_message):
         chain = (snapshot.values or {}).get("sop_chain")
         if chain:
             text = format_sop_walkthrough_table(chain)
-        else:
-            text = ("I don't have an isolation procedure stored yet — ask me about a "
-                    "pipe shutdown first, then I can walk you through the steps.")
-        _record_turn(graph, config, user_message, text)
-        return {"final_response": text, "pipe_id": (snapshot.values or {}).get("pipe_id")}
+            _record_turn(graph, config, user_message, text)
+            return {"final_response": text, "pipe_id": (snapshot.values or {}).get("pipe_id")}
 
     # If this thread is paused mid-run on a clarification interrupt, the user's
     # message is the answer to that question — resume the graph instead of

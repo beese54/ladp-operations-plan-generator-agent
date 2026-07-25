@@ -1,11 +1,12 @@
 """
 MLflow scorers for the Ops Plan Generator.
 
-Five scorers total:
+Six scorers total:
   Rule-based (deterministic, zero LLM cost):
     feasibility_match_scorer   — exact verdict match vs expected
     valve_count_scorer         — actual valve steps >= expected minimum
     intent_accuracy_scorer     — pipe_id and date extracted correctly
+    scope_fidelity_scorer      — general_response never claims an unimplemented capability
 
   LLM-as-judge (Together.ai Llama 3.3 70B, already paid for):
     safety_compliance_judge    — safety_warnings adequacy, scored 1–5
@@ -19,6 +20,7 @@ Logical Correctness Rubric (primary metric for human review, 1–5):
     1 = Wrong feasibility verdict, or valve IDs do not match the network topology
 """
 
+import pandas as pd
 from mlflow.metrics import MetricValue
 
 try:
@@ -53,10 +55,32 @@ try:
         scores = ((pipe_match + date_match) / 2).tolist()
         return MetricValue(scores=scores)
 
+    @_mlflow_metrics.make_metric(name="scope_fidelity", greater_is_better=True)
+    def scope_fidelity_scorer(eval_df, _builtin_metrics):
+        """1.0 unless actual_response contains one of that row's banned_phrases
+        (pipe-separated, case-insensitive substring match) — catches the
+        assistant claiming a capability (photo upload, work orders, pump/tank
+        coordination, ...) that isn't implemented anywhere in this system.
+        Rows with no banned_phrases entry always score 1.0."""
+        def _row_score(response, banned):
+            if not isinstance(banned, str) or not banned.strip():
+                return 1.0
+            response_lower = (response or "").lower()
+            phrases = [p.strip().lower() for p in banned.split("|") if p.strip()]
+            return 0.0 if any(p in response_lower for p in phrases) else 1.0
+
+        banned_col = eval_df["banned_phrases"] if "banned_phrases" in eval_df.columns else pd.Series([""] * len(eval_df))
+        scores = [
+            _row_score(resp, banned)
+            for resp, banned in zip(eval_df["actual_response"], banned_col)
+        ]
+        return MetricValue(scores=scores)
+
 except Exception:
     feasibility_match_scorer = None
     valve_count_scorer = None
     intent_accuracy_scorer = None
+    scope_fidelity_scorer = None
 
 
 # ── LLM-as-judge scorers ──────────────────────────────────────────────────────
@@ -145,6 +169,7 @@ def get_available_scorers() -> list:
         feasibility_match_scorer,
         valve_count_scorer,
         intent_accuracy_scorer,
+        scope_fidelity_scorer,
         safety_compliance_judge,
         plan_coherence_judge,
     ]
