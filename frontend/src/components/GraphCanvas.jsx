@@ -346,6 +346,22 @@ export default function GraphCanvas({ nodes, edges, trace = null }) {
       .addClass('traced-origin')
   }, [trace])
 
+  // The parent toggles this pane's visibility via CSS display (not
+  // mount/unmount, so the layout survives switching to the calendar view and
+  // back) — but a canvas-based renderer like Cytoscape can't detect a
+  // display:none -> visible transition on its own and gets stuck at zero
+  // size. Watch the container directly and resize on any change, including
+  // becoming visible again.
+  useEffect(() => {
+    const cy = cyRef.current
+    if (!cy || typeof ResizeObserver === 'undefined') return
+    const container = cy.container()
+    if (!container) return
+    const observer = new ResizeObserver(() => cy.resize())
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [])
+
   useEffect(() => {
     const cy = cyRef.current
     if (!cy) return

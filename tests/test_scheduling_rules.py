@@ -6,6 +6,7 @@ Anchor dates (all 2026):
   - 2026-06-16     Tuesday (today)   -> clear of any blackout
   - 2026-06-19     Friday            -> clear of any blackout
 """
+import json
 from datetime import date, datetime
 
 import pytest
@@ -63,6 +64,69 @@ def test_working_days_between_excludes_weekend():
     assert sr.working_days_between(date(2026, 6, 17), date(2026, 6, 22)) == 2
     # Wed 06-17 .. Tue 06-23 (exclusive): Thu 18, Fri 19, Mon 22 = 3
     assert sr.working_days_between(date(2026, 6, 17), date(2026, 6, 23)) == 3
+
+
+# --------------------------------------------------------------------------- #
+# classify_day / available_holiday_years (calendar-view support)
+# --------------------------------------------------------------------------- #
+def test_classify_day_ordinary_working_day():
+    info = sr.classify_day(date(2026, 6, 16))  # Tue, clear of any blackout
+    assert info == {
+        "date": "2026-06-16",
+        "is_holiday": False,
+        "holiday_name": None,
+        "is_blackout": False,
+        "is_working_day": True,
+        "is_weekend": False,
+    }
+
+
+def test_classify_day_weekend():
+    info = sr.classify_day(date(2026, 6, 20))  # Sat
+    assert info["is_weekend"] is True
+    assert info["is_working_day"] is False
+    assert info["is_holiday"] is False
+    assert info["is_blackout"] is False
+
+
+def test_classify_day_holiday_itself_is_not_blackout():
+    # Vesak Day observed 2026-06-01 (Mon, in-lieu) — the holiday's own date
+    # must be is_holiday=True, is_blackout=False (never double-shaded).
+    info = sr.classify_day(date(2026, 6, 1))
+    assert info["is_holiday"] is True
+    assert info["holiday_name"] == "Vesak Day"
+    assert info["is_blackout"] is False
+
+
+def test_classify_day_blackout_window():
+    # One day into Vesak in-lieu's trailing +7 window (06-01 -> 06-08 blocked).
+    # Friday 06-05 is still a normal working day (blackout only restricts
+    # planning NEW ops there, per R1 — it's not a day off).
+    info = sr.classify_day(date(2026, 6, 5))
+    assert info["is_holiday"] is False
+    assert info["is_blackout"] is True
+    assert info["is_working_day"] is True
+
+
+def test_classify_day_year_boundary_blackout(tmp_path):
+    """A holiday dated in year Y+1 must still shade blackout dates in December
+    of year Y — classify_day must never filter by the query date's own year."""
+    holidays_file = tmp_path / "holidays.json"
+    holidays_file.write_text(json.dumps({
+        "2027": [{"name": "New Year's Day", "date": "2027-01-01", "observed": None}]
+    }))
+    path = str(holidays_file)
+    # 2027-01-01 blackout window: 2026-12-25 .. 2027-01-08
+    in_window = sr.classify_day(date(2026, 12, 27), path=path)
+    assert in_window["is_blackout"] is True
+    assert in_window["is_holiday"] is False
+
+    outside_window = sr.classify_day(date(2026, 12, 24), path=path)
+    assert outside_window["is_blackout"] is False
+
+
+def test_available_holiday_years():
+    assert sr.available_holiday_years() == {2026, 2027}
 
 
 # --------------------------------------------------------------------------- #

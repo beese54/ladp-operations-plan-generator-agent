@@ -5,7 +5,7 @@ import rehypeRaw from 'rehype-raw'
 
 const SESSION_ID = `web-${Date.now()}`
 
-export default function ChatPanel({ onPipeResolved }) {
+export default function ChatPanel({ onPipeResolved, onScheduleUpdated }) {
   const [messages, setMessages] = useState([
     { role: 'assistant', text: 'Ask me about any pipe shutdown, e.g. "Can I shut down pipe_084 on 2026-05-10 from 08:00 to 16:00?"' },
   ])
@@ -34,6 +34,8 @@ export default function ChatPanel({ onPipeResolved }) {
       setMessages(prev => [...prev, { role: 'assistant', text: reply }])
       // Auto-trace: highlight the resolved pipe's shutdown chain on the network graph
       if (data.pipe_id && onPipeResolved) onPipeResolved(data.pipe_id)
+      // Auto-switch: a schedule question was answered, or a booking was just confirmed
+      if (data.schedule_view && onScheduleUpdated) onScheduleUpdated(data.schedule_view.year, data.schedule_view.month)
     } catch {
       setMessages(prev => [...prev, { role: 'assistant', text: 'Connection error — is the API running?' }])
     } finally {

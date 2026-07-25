@@ -20,6 +20,9 @@ class ChatResponse(BaseModel):
     awaiting_clarification: bool = False
     booked_operation_id: Optional[str] = None
     processing_time_ms: int = 0
+    # Non-null exactly on a turn the left-panel calendar should switch to/refresh:
+    # a schedule-listing question was asked, or a booking was just committed.
+    schedule_view: Optional[dict[str, int]] = None
 
 
 class CreateScheduleRequest(BaseModel):
@@ -49,6 +52,23 @@ class ScheduledOperationResponse(BaseModel):
     scheduled_end: str
     status: str
     priority: str
+
+
+class DayScheduleEntry(BaseModel):
+    date: str
+    weekday: int  # Monday=0 .. Sunday=6
+    is_holiday: bool
+    holiday_name: Optional[str] = None
+    is_blackout: bool
+    is_working_day: bool
+    operations: list[dict[str, Any]] = []
+
+
+class MonthScheduleResponse(BaseModel):
+    year: int
+    month: int
+    holiday_data_available: bool
+    days: list[DayScheduleEntry]
 
 
 class HealthResponse(BaseModel):

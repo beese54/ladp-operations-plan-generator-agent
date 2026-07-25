@@ -1,12 +1,23 @@
+from calendar import monthrange
+from datetime import date, datetime
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
-from schemas.api_models import CreateScheduleRequest, CreateScheduleResponse, ScheduledOperationResponse
+from schemas.api_models import (
+    CreateScheduleRequest,
+    CreateScheduleResponse,
+    DayScheduleEntry,
+    MonthScheduleResponse,
+    ScheduledOperationResponse,
+)
 from tools.calendar_tools import (
     check_pipe_schedule_conflicts,
     create_scheduled_operation,
     cancel_operation,
+    get_active_operations,
     get_upcoming_operations,
 )
+from tools.scheduling_rules import available_holiday_years, classify_day
+from agents.calendar_agent import _operations_in_range
 
 router = APIRouter()
 
@@ -30,6 +41,53 @@ async def list_schedule(
         )
         for r in rows
     ]
+
+
+@router.get("/schedule/month", response_model=MonthScheduleResponse)
+async def get_month_schedule(
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+) -> MonthScheduleResponse:
+    """Structured month view for the left-panel calendar: every day of the
+    month classified (holiday/blackout/working) plus the operations booked
+    on it. Reuses the same active-ops source and month-range logic the
+    chat-driven schedule-listing path already relies on."""
+    first = date(year, month, 1)
+    last_day_num = monthrange(year, month)[1]
+    month_iso = first.isoformat()
+
+    existing = get_active_operations()
+    touching = _operations_in_range(existing, month_iso, month_iso)
+    by_id = {op["operation_id"]: op for op in existing}
+    ops_full = [by_id[o["operation_id"]] for o in touching if o["operation_id"] in by_id]
+
+    holiday_years = available_holiday_years()
+
+    days: list[DayScheduleEntry] = []
+    for day_num in range(1, last_day_num + 1):
+        d = date(year, month, day_num)
+        info = classify_day(d)
+        day_ops = [
+            op for op in ops_full
+            if datetime.fromisoformat(op["scheduled_start"]).date() <= d
+            and datetime.fromisoformat(op["scheduled_end"]).date() >= d
+        ]
+        days.append(DayScheduleEntry(
+            date=info["date"],
+            weekday=d.weekday(),
+            is_holiday=info["is_holiday"],
+            holiday_name=info["holiday_name"],
+            is_blackout=info["is_blackout"],
+            is_working_day=info["is_working_day"],
+            operations=day_ops,
+        ))
+
+    return MonthScheduleResponse(
+        year=year,
+        month=month,
+        holiday_data_available=year in holiday_years,
+        days=days,
+    )
 
 
 @router.post("/schedule", response_model=CreateScheduleResponse)

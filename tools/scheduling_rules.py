@@ -176,6 +176,41 @@ def working_days_between(
     return count
 
 
+def available_holiday_years(path: Optional[str] = None) -> set[int]:
+    """Years the holiday seed file actually has entries for."""
+    return {h.date.year for h in load_holidays(path=path)}
+
+
+def classify_day(value: DateLike, path: Optional[str] = None) -> dict[str, Any]:
+    """Per-day classification for calendar display.
+
+    is_blackout is the +/-7 day window ONLY, excluding the holiday's own
+    observance date (that's is_holiday) so a single day is never shaded as
+    both at once. Looks across the FULL holiday file (no year filter) rather
+    than just value's year, since a date near a year boundary can fall in the
+    blackout window of a holiday dated in the adjacent year.
+    """
+    d = _to_date(value)
+    resolved_path = str(path or _DEFAULT_HOLIDAYS_PATH)
+    observance = _observance_dates(resolved_path)
+    is_holiday = d in observance
+    holiday_name = None
+    if is_holiday:
+        for h in _load_raw(resolved_path):
+            if d in h.observance_dates():
+                holiday_name = h.name
+                break
+    is_blackout = (not is_holiday) and d in _blackout_set(resolved_path)
+    return {
+        "date": d.isoformat(),
+        "is_holiday": is_holiday,
+        "holiday_name": holiday_name,
+        "is_blackout": is_blackout,
+        "is_working_day": is_working_day(d, path),
+        "is_weekend": d.weekday() >= 5,
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Existing-operation helpers
 # --------------------------------------------------------------------------- #

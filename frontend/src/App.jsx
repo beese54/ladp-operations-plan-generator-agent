@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import GraphCanvas from './components/GraphCanvas.jsx'
+import CalendarView from './components/CalendarView.jsx'
 import ChatPanel from './components/ChatPanel.jsx'
 
 export default function App() {
@@ -9,6 +10,14 @@ export default function App() {
   const [traceInput, setTraceInput] = useState('')
   const [traceLoading, setTraceLoading] = useState(false)
   const [traceError, setTraceError] = useState(null)
+
+  // Left panel: which view is showing, auto-switched by chat activity
+  // (schedule question answered / booking confirmed -> calendar; pipe
+  // question resolved -> back to graph) as well as manual toolbar tabs.
+  const now = new Date()
+  const [leftView, setLeftView] = useState('graph')
+  const [calendarYear, setCalendarYear] = useState(now.getFullYear())
+  const [calendarMonth, setCalendarMonth] = useState(now.getMonth() + 1)
 
   useEffect(() => {
     fetch('/api/v1/graph')
@@ -24,6 +33,7 @@ export default function App() {
     // idArg may be a string (chat-driven) or absent/event (button/Enter) → fall back to the input box
     const id = (typeof idArg === 'string' ? idArg : traceInput).trim()
     if (!id) return
+    setLeftView('graph')         // a pipe question is being answered — show the graph
     setTraceInput(id)            // reflect the traced pipe in the search box
     setTraceLoading(true)
     setTraceError(null)
@@ -55,28 +65,74 @@ export default function App() {
 
       <div style={styles.body}>
         <div style={styles.graphPane}>
-          <PipeSearch
-            value={traceInput}
-            onChange={setTraceInput}
-            onTrace={runTrace}
-            onClear={clearTrace}
-            loading={traceLoading}
-            error={traceError}
-            trace={trace}
-          />
+          <div style={styles.viewTabRow}>
+            <ViewTabs leftView={leftView} onChange={setLeftView} />
+          </div>
+          {leftView === 'graph' && (
+            <PipeSearch
+              value={traceInput}
+              onChange={setTraceInput}
+              onTrace={runTrace}
+              onClear={clearTrace}
+              loading={traceLoading}
+              error={traceError}
+              trace={trace}
+            />
+          )}
           <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
-            {graphError
-              ? <div style={styles.error}>Graph load failed: {graphError}</div>
-              : graphData
-                ? <GraphCanvas nodes={graphData.nodes} edges={graphData.edges} trace={trace} />
-                : <div style={styles.loading}>Loading network graph…</div>
-            }
+            {/* Both views stay mounted permanently and are toggled via CSS, not
+                conditional rendering — GraphCanvas's cose-bilkent layout is
+                randomized (randomize: true), so unmounting/remounting it on every
+                tab switch reshuffled the whole graph into a new random layout
+                each time, which read as "a different pipe is selected" even
+                though the trace itself never changed. Keeping it mounted
+                preserves both its layout and Cytoscape instance across switches. */}
+            <div style={{ display: leftView === 'graph' ? 'block' : 'none', height: '100%' }}>
+              {graphError
+                ? <div style={styles.error}>Graph load failed: {graphError}</div>
+                : graphData
+                  ? <GraphCanvas nodes={graphData.nodes} edges={graphData.edges} trace={trace} />
+                  : <div style={styles.loading}>Loading network graph…</div>}
+            </div>
+            <div style={{ display: leftView === 'calendar' ? 'block' : 'none', height: '100%' }}>
+              <CalendarView
+                year={calendarYear}
+                month={calendarMonth}
+                onNavigate={(y, m) => { setCalendarYear(y); setCalendarMonth(m) }}
+              />
+            </div>
           </div>
         </div>
         <div style={styles.chatPane}>
-          <ChatPanel onPipeResolved={runTrace} />
+          <ChatPanel
+            onPipeResolved={runTrace}
+            onScheduleUpdated={(y, m) => {
+              setLeftView('calendar')
+              setCalendarYear(y)
+              setCalendarMonth(m)
+            }}
+          />
         </div>
       </div>
+    </div>
+  )
+}
+
+function ViewTabs({ leftView, onChange }) {
+  return (
+    <div style={styles.viewTabs}>
+      <button
+        style={{ ...styles.viewTabBtn, ...(leftView === 'graph' ? styles.viewTabActive : {}) }}
+        onClick={() => onChange('graph')}
+      >
+        Network Graph
+      </button>
+      <button
+        style={{ ...styles.viewTabBtn, ...(leftView === 'calendar' ? styles.viewTabActive : {}) }}
+        onClick={() => onChange('calendar')}
+      >
+        Ops Calendar
+      </button>
     </div>
   )
 }
@@ -130,6 +186,20 @@ const styles = {
   chatPane: { flex: '0 0 40%', display: 'flex', flexDirection: 'column', overflow: 'hidden' },
   loading: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#64748b' },
   error: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#f87171', padding: '24px', textAlign: 'center' },
+
+  // Left-panel view switcher (graph <-> calendar)
+  viewTabRow: {
+    display: 'flex', padding: '7px 12px 0',
+    background: '#1e293b', flexShrink: 0,
+  },
+  viewTabs: { display: 'flex', gap: 2 },
+  viewTabBtn: {
+    background: 'none', border: '1px solid #334155', borderBottom: 'none',
+    borderRadius: '5px 5px 0 0',
+    color: '#94a3b8', fontSize: 12, fontWeight: 600,
+    padding: '5px 12px', cursor: 'pointer',
+  },
+  viewTabActive: { background: '#0f172a', color: '#f59e0b' },
 
   // Pipe trace toolbar
   toolbar: {

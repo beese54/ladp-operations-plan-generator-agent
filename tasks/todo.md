@@ -223,3 +223,77 @@ fabricated a customer count; now it honestly says the documented excerpts don't 
   UNKNOWN/GENERAL_QUERY for clearly off-topic messages means the wording of the safe decline
   varies by run. Both wordings are honest and non-fabricating. Worth a separate look if it
   becomes user-visible confusion, not urgent.
+
+## Phase 14 — Left-panel view switcher: auto-appearing monthly ops calendar (2026-07-25)
+New feature: the left panel (previously graph-only) can now also show a monthly operations
+calendar (Mon-Sun grid, holiday/blackout shading, operation chips), auto-switched to by chat
+activity — a schedule-listing question answered, or a booking confirmed — mirroring the existing
+onPipeResolved auto-trace pattern. Manual toolbar tabs always available too.
+- [x] 14.1 tools/scheduling_rules.py — classify_day(), available_holiday_years() (thin wrappers
+  over existing load_holidays/blackout_dates/is_working_day; no year-filter, so year-boundary
+  blackout spillover is handled correctly)
+- [x] 14.2 api/routes/schedule.py — GET /schedule/month (reuses get_active_operations() +
+  agents.calendar_agent._operations_in_range, same helper schedule_query_node already uses)
+- [x] 14.3 schemas/api_models.py — MonthScheduleResponse, DayScheduleEntry,
+  ChatResponse.schedule_view
+- [x] 14.4 api/routes/chat.py — _schedule_view_for(): SCHEDULE_QUERY turn uses target_date;
+  booking-confirmed turn does a fresh get_operation() DB lookup for the actual scheduled_start
+  (NOT target_date — the scheduling engine can auto-shift a booking off a blackout/conflict date)
+- [x] 14.5 frontend/src/components/CalendarView.jsx — new hand-rolled grid (no new dependency;
+  confirmed none existed), Monday-first columns via server-provided `weekday` field, holiday >
+  blackout > weekend > working shading precedence, chips colored by status/EMERGENCY class,
+  detail popover on click (read-only, no reverse callback into chat), footer legend, prev/next/
+  year nav, graceful "no holiday data" notice for unseeded years
+- [x] 14.6 frontend/src/App.jsx — leftView/calendarYear/calendarMonth state, ViewTabs toolbar,
+  onScheduleUpdated wiring, runTrace also switches back to graph view (symmetric auto-switch)
+- [x] 14.7 frontend/src/components/ChatPanel.jsx — onScheduleUpdated prop, fired off
+  data.schedule_view same fire-after-response pattern as the existing onPipeResolved line
+
+### Verification
+- [x] PYTHONPATH=. pytest tests/ -v — 163 passed (39 new: classify_day/available_holiday_years,
+  the month endpoint, _schedule_view_for including the auto-shift-uses-DB-not-target_date case)
+- [x] frontend: npm run build — clean, no new errors
+- [x] Live browser (claude-in-chrome), driven end-to-end:
+  - Ops Calendar tab renders real DB operations with correct chip colors, incl. an
+    operation_class=EMERGENCY op rendering red despite status=PLANNED (cross-checked against
+    the raw API response)
+  - Detail popover on click shows correct operation/holiday info
+  - Dec 2026 -> Jan 2027 navigation: Christmas + New Year blackout windows both shade correctly
+    across the year boundary on REAL seed data (not just the synthetic unit-test fixture)
+  - Year 2028: graceful "Holiday data not available for 2028 yet" notice, ops still render
+  - Chat "what's already booked in november 2026?" -> left panel auto-switched to Nov 2026,
+    table in chat matches calendar exactly (Deepavali shading + pipe_082 op)
+  - Chat pipe_084 shutdown question -> left panel auto-switched BACK to Network Graph with trace
+  - Full booking flow (planned -> plan it for me -> confirm) where the engine auto-shifted the
+    booking from the requested May 2026 to June 2026 (R2 conflict with OPS-2026-05) -> left panel
+    switched to JUNE 2026 (the ACTUAL booked month), not May (the original request) — real-world
+    confirmation of the DB-lookup-not-target_date design, not just the unit test
+
+### Review
+- The `_schedule_view_for` DB-lookup design (vs. trusting `target_date`) turned out to matter in
+  practice on the very first live booking test driven during verification — the engine shifted
+  the request by a full month due to a scheduling conflict, and the calendar landed on the correct
+  month only because of the fresh get_operation() lookup.
+- No new dependency added (hand-rolled grid), no scheduled_operations schema change, holiday seed
+  data left at 2026-2027 per user decision (graceful degradation beyond that, not fabricated
+  dates) — matches the project's existing minimal-footprint conventions.
+
+### Follow-up fix (2026-07-25) — graph reshuffling on every tab switch
+User caught a real regression while trying the feature: switching Network Graph -> Ops Calendar ->
+Network Graph appeared to select "a different pipe every time." Root cause: the left pane used
+conditional RENDERING (`leftView === 'graph' ? <GraphCanvas/> : <CalendarView/>`), so GraphCanvas
+fully unmounted/remounted on every switch. Its cose-bilkent layout has `randomize: true`, so each
+remount reshuffled every node to a new random position — the SAME traced pipe (confirmed via the
+toolbar stats staying "3 pipes 4 valves 1 tail-end" throughout), just visually relocated each time,
+which read as a different selection.
+- [x] frontend/src/App.jsx — both GraphCanvas and CalendarView now stay permanently mounted; the
+  left pane toggles which is visible via CSS `display`, not conditional rendering
+- [x] frontend/src/components/GraphCanvas.jsx — added a ResizeObserver on the Cytoscape
+  container, calling `cy.resize()` on any size change. Needed because a `display:none` ->
+  visible transition isn't otherwise detected by Cytoscape's canvas and left it stuck at zero
+  size (found this via live testing — the graph pane went blank after the first fix attempt,
+  before adding the observer)
+- [x] Verified in-browser (claude-in-chrome): traced pipe_084, switched tabs 5+ times in a row —
+  layout, trace, and toolbar stats stay byte-for-byte identical every time; no blank canvas; no
+  new console errors/warnings beyond pre-existing unrelated Cytoscape stylesheet noise
+- [x] `npm run build` clean; backend test suite unaffected (163 passed, frontend-only bug)
