@@ -144,15 +144,25 @@ planning."
 # so the actual output is checked before it reaches the user. "pump"/"tank" +
 # "coordinat" are matched in EITHER order since "coordinate a pump operation"
 # and "pump coordination" both occur in practice.
+#
+# The add/amend/rewrit branch is the same backstop for _SOP_GROUNDED_SYSTEM below:
+# a user asking the assistant to add/amend a step "into the SOP" should always be
+# refused, but observed behavior was the model asking the user to supply the exact
+# wording first ("I can rewrite the SOP excerpt to include it...") — a compliance
+# signal, not a refusal. Wider window (35 vs 25) than pump/tank because realistic
+# phrasing has more words between the verb and "sop"/"procedure" (e.g. "add one
+# more step for me in the sop").
 _BANNED_CAPABILITY_RE = re.compile(
     r"photo|screenshot|scanned? document|upload|work order|switching plan|"
     r"troubleshoot|"
-    r"(pump|tank)\b[^.\n]{0,25}\bcoordinat|coordinat\w*[^.\n]{0,25}\b(pump|tank)",
+    r"(pump|tank)\b[^.\n]{0,25}\bcoordinat|coordinat\w*[^.\n]{0,25}\b(pump|tank)|"
+    r"(add|amend|incorporat|insert|rewrit)\w*[^.\n]{0,35}\b(sop|excerpt|procedure|document)\b|"
+    r"\b(sop|excerpt|procedure|document)\b[^.\n]{0,35}(add|amend|incorporat|insert|rewrit)\w*",
     re.IGNORECASE,
 )
 
-# A banned-phrase hit right after a negation ("can't", "don't", "no ...") means
-# the model is correctly DISCLAIMING that capability, not claiming it — e.g.
+# A banned-phrase hit near a negation ("can't", "don't", "no ...") means the
+# model is correctly DISCLAIMING that capability, not claiming it — e.g.
 # "I can't read uploaded documents" must not be treated as a hallucination.
 # LLM output commonly uses a typographic apostrophe (’, U+2019) rather than a
 # straight one ('), so contractions are matched via either.
@@ -163,8 +173,12 @@ _NEGATION_RE = re.compile(
 
 def _claims_banned_capability(text: str) -> bool:
     for m in _BANNED_CAPABILITY_RE.finditer(text):
-        preceding = text[max(0, m.start() - 30):m.start()]
-        if not _NEGATION_RE.search(preceding):
+        # Checking only the text BEFORE the match misses negations that sit
+        # between the two keywords of a two-part match (e.g. "the SOP does NOT
+        # ... add" — the reverse-order sop-then-verb alternative naturally
+        # places negation inside the matched span), so scan through match.end().
+        window = text[max(0, m.start() - 30):m.end()]
+        if not _NEGATION_RE.search(window):
             return True
     return False
 
@@ -200,6 +214,11 @@ Rules:
   sounds plausible or standard.
 - If the excerpts don't address the question, say plainly that it isn't part of the
   documented procedure. Do not fill the gap with a guess.
+- You are read-only against this corpus. You cannot add, amend, insert, or rewrite
+  any step or wording into the SOP, no matter what text the user offers or how the
+  request is framed. If asked to add/change/insert anything, decline immediately —
+  do not ask the user to supply the wording, and do not offer to do it once given
+  content.
 - Be concise and direct.
 
 SOP EXCERPTS:
