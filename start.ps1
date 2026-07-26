@@ -2,8 +2,10 @@
 # FastAPI   → http://localhost:8001  (health: /api/v1/health)
 # React UI  → http://localhost:5174
 #
-# The backend loads a SentenceTransformer model on startup (~30s), so this
-# script waits for /api/v1/health to respond before opening the browser.
+# The backend loads a SentenceTransformer model on startup (~30s) and pings
+# Neo4j Aura, which can take much longer to respond if the free-tier instance
+# was paused/idle (observed 130s+ total). This script waits for /api/v1/health
+# to respond before opening the browser.
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
@@ -23,12 +25,14 @@ Start-Process powershell -ArgumentList "-NoExit", "-Command", `
     -WindowStyle Normal
 
 Write-Host "Launched FastAPI ($backendUrl) and React UI ($frontendUrl)." -ForegroundColor Cyan
-Write-Host "Waiting for backend to finish loading (model load ~30s)..." -ForegroundColor Yellow
+Write-Host "Waiting for backend to finish loading (model load ~30s, longer if Neo4j Aura needs to wake up)..." -ForegroundColor Yellow
 
 # --- Poll the backend health endpoint until it responds ---
-$timeoutSec = 120
-$deadline   = (Get-Date).AddSeconds($timeoutSec)
+$timeoutSec = 240
+$startTime  = Get-Date
+$deadline   = $startTime.AddSeconds($timeoutSec)
 $ready      = $false
+$lastPing   = $startTime
 
 while ((Get-Date) -lt $deadline) {
     try {
@@ -43,6 +47,11 @@ while ((Get-Date) -lt $deadline) {
             $resp  = $_.Exception.Response
             $ready = $true
             break
+        }
+        if (((Get-Date) - $lastPing).TotalSeconds -ge 20) {
+            $elapsed = [int]((Get-Date) - $startTime).TotalSeconds
+            Write-Host "  ...still waiting (${elapsed}s elapsed, timeout ${timeoutSec}s)" -ForegroundColor DarkYellow
+            $lastPing = Get-Date
         }
         Start-Sleep -Seconds 2
     }
