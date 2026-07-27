@@ -68,9 +68,12 @@ Rules:
   than one month (e.g. "August to November 2026", "between June and September 2026", "Q1 2026"
   -> target_date="2026-01-01", target_end_date="2026-03-01") — use the 1st of the end month,
   same rule as target_date. Leave target_end_date null for a single month/date query.
-- end_date_mode is "AUTO" when the operator defers the end date to the system
-  ("plan it for me", "you decide", "estimate it", "however long it takes",
-  "no end date"); "USER" when target_end_date is given; otherwise null.
+- end_date_mode is "AUTO" whenever the operator defers the end date/duration to
+  the system, in ANY phrasing to that effect — e.g. "plan it for me", "plan for
+  me", "you plan it", "you decide", "estimate it", "however long it takes", "no
+  end date", "not sure, you figure it out". Match the MEANING (deferring the
+  decision), not one exact wording. "USER" when target_end_date is given;
+  otherwise null.
 - operation_class: "EMERGENCY" if the user signals urgency (emergency, urgent, burst,
   leak, main break, pipe failure); "PLANNED" if they say planned/scheduled/routine;
   otherwise null.
@@ -340,13 +343,29 @@ def intent_parser_node(state: OrchestratorState) -> dict:
     if isinstance(end_mode, str):
         end_mode = end_mode.upper()
 
+    # operation_type needs the same protection: mid-clarification, user_query_raw
+    # is a merged, fragment-heavy string (e.g. "shut pipe 84. 9 septmeber. planned.
+    # plan for me") that can occasionally read as ambiguous to the classifier and
+    # come back UNKNOWN — which would otherwise silently discard an already-
+    # established SHUTDOWN/INSPECTION/MAINTENANCE and route to the off-topic
+    # decline mid-flow, even though the answer was perfectly valid for the slot
+    # actually being asked about. Only guards the UNKNOWN failure mode: a genuine
+    # SCHEDULE_QUERY/GENERAL_QUERY tangent mid-flow still takes over normally.
+    op_type = parsed.get("operation_type") or "UNKNOWN"
+    if (
+        op_type == "UNKNOWN"
+        and state.get("awaiting_clarification")
+        and state.get("operation_type") in ("SHUTDOWN", "INSPECTION", "MAINTENANCE")
+    ):
+        op_type = state["operation_type"]
+
     return {
         "pipe_id": _normalize_pipe_id(parsed.get("pipe_id")) or state.get("pipe_id"),
         "target_date": parsed.get("target_date") or state.get("target_date"),
         "target_end_date": parsed.get("target_end_date") or state.get("target_end_date"),
         "end_date_mode": end_mode,
         "operation_class": op_class,
-        "operation_type": parsed.get("operation_type", "UNKNOWN"),
+        "operation_type": op_type,
         "intent_confidence": float(parsed.get("confidence", 0.0)),
         "agents_completed": [],
         "error_messages": [],
