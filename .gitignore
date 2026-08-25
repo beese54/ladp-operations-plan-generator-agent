@@ -1,20 +1,69 @@
+# Secrets
 .env
+
+# Python virtualenv
 .venv/
+
+# Python bytecode
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+
+# Data — generated at runtime, never commit
 data/chroma_db/
 data/calendar.db
+data/checkpoints.db
 *.db
 *.db-wal
 *.db-shm
+
+# Chatbot probe run outputs (regenerable; keep the question bank, not the logs)
+data/probe_results/
+
+# MLflow run artifacts and local tracking store
+mlruns/
+mlflow.db
+
+# Test/build cache
 .pytest_cache/
 dist/
 build/
 *.egg-info/
+.coverage
+htmlcov/
 
-# Frontend dependencies
+# Frontend dependencies and build output
 node_modules/
+frontend/dist/
 
-# MLflow run artifacts
-mlruns/
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# SME editing surface for the probe question bank.
+# Binary, so no useful diff and merge conflicts can't be resolved.
+# Regenerate from the committed CSV:
+#   python scripts/sync_probe_questions.py --to-excel
+data/eval_datasets/*.xlsx
+
+# ── Personal / interim work — local only, avoids merge conflicts ─────────────
+# The whole docs/ folder is ignored. It currently holds:
+#   Statement_of_Work_Draft.md      SoW draft, not yet submitted to AISG
+#   irfaan_plan.md                  personal task plan and progress log
+#   presentation_plan.md            final presentation outline + speaker notes
+#   consult_script.md               consult prep notes
+#   demo_script.md                  live demo run sheet
+#   system_walkthrough.md           personal notes on how the codebase works
+#   LADP_Final_Presentation.pptx    generated deck
+#   assets/*.png                    generated diagrams for the deck
+docs/
+
+# Scripts that build the personal presentation deck into docs/.
+# Interim work, and their output is ignored anyway.
+scripts/generate_diagrams.py
+scripts/generate_slides.py
