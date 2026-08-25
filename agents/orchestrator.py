@@ -21,6 +21,8 @@ from agents.sop_agent import sop_agent_node
 from agents.historical_agent import historical_agent_node
 from agents.ops_plan_generator import ops_plan_generator_node
 from prompts.sop_walkthrough_prompt import format_sop_walkthrough_table
+from prompts.system_knowledge import answer_system_question
+from prompts.topology_answers import answer_topology_question
 from tools.calendar_tools import create_scheduled_operation, reschedule_operation, get_active_operations
 from tools.chroma_tools import search_sop_documents
 from tools import scheduling_rules as sr
@@ -157,7 +159,7 @@ planning."
 # more step for me in the sop").
 _BANNED_CAPABILITY_RE = re.compile(
     r"photo|screenshot|scanned? document|upload|work order|switching plan|"
-    r"troubleshoot|"
+    r"i can\b[^.\n]{0,30}\btroubleshoot|troubleshoot\w*[^.\n]{0,20}\bservice|"
     r"(pump|tank)\b[^.\n]{0,25}\bcoordinat|coordinat\w*[^.\n]{0,25}\b(pump|tank)|"
     r"(add|amend|incorporat|insert|rewrit)\w*[^.\n]{0,35}\b(sop|excerpt|procedure|document)\b|"
     r"\b(sop|excerpt|procedure|document)\b[^.\n]{0,35}(add|amend|incorporat|insert|rewrit)\w*",
@@ -264,10 +266,15 @@ def _answer_is_grounded(answer: str, chunk_texts: list[str]) -> bool:
     return True
 
 
-def _sop_grounded_answer(user_query: str) -> str:
+def _sop_grounded_answer(user_query: str) -> tuple[str, str]:
+    """Return (answer, retrieved_chunks_text) grounded in the SOP corpus.
+
+    The second element is the concatenated chunk text used for RAG triad scoring
+    (groundedness + context relevance). Empty string if nothing was retrieved.
+    """
     chunks = search_sop_documents(user_query, n_results=5)
     if not chunks:
-        return _NO_SOP_MATCH_FALLBACK
+        return _NO_SOP_MATCH_FALLBACK, ""
 
     excerpts = "\n\n---\n\n".join(c["text"] for c in chunks)
     s = get_settings()
@@ -287,7 +294,7 @@ def _sop_grounded_answer(user_query: str) -> str:
         answer = response.choices[0].message.content or ""
     except Exception as e:
         logger.error("SOP-grounded answer error: %s", e)
-        return _NO_SOP_MATCH_FALLBACK
+        return _NO_SOP_MATCH_FALLBACK, excerpts
 
     if not _answer_is_grounded(answer, [c["text"] for c in chunks]):
         logger.warning(
@@ -295,9 +302,18 @@ def _sop_grounded_answer(user_query: str) -> str:
             "for query %r — replacing with the honest fallback. Raw answer: %r",
             user_query, answer,
         )
-        return _NO_SOP_MATCH_FALLBACK
+        return _NO_SOP_MATCH_FALLBACK, excerpts
 
-    return answer
+    # Source attribution: show which document(s) the answer was grounded in.
+    # Chunks carry metadata with the source filename — dedupe and format as a
+    # footer so the operator can verify the answer against the real document.
+    sources = sorted({c.get("metadata", {}).get("source_file", "") for c in chunks
+                      if c.get("metadata", {}).get("source_file")})
+    if sources:
+        source_line = "\n\n---\n*Sources: " + ", ".join(f"`{s}`" for s in sources) + "*"
+        answer += source_line
+
+    return answer, excerpts
 
 
 # ─── Node: Intent Parser ──────────────────────────────────────────────────────
@@ -378,11 +394,45 @@ def intent_parser_node(state: OrchestratorState) -> dict:
 @mlflow.trace(name="general_response", span_type=SpanType.AGENT)
 def general_response_node(state: OrchestratorState) -> dict:
     user_query = state.get("user_query_raw", "")
+    retrieved_chunks = None  # set by the sop_rag path if it runs
 
-    # Default to grounded retrieval from the real ingested corpus — never the
-    # model's own pretrained knowledge (see _sop_grounded_answer). Only genuine
+    # Strip the crew-page context prefix before routing — it contains words like
+    # "crew", "site", "link" that confuse topic matching. The prefix should only
+    # influence the LLM's tone on the sop_rag path, not the routing decision.
+    import re as _re
+    routing_query = _re.sub(r"^\[FIELD CREW[^\]]*\]\s*", "", user_query, count=1)
+
+    # FIRST: questions about how this system works (scheduling rules, duration
+    # sizing, emergency handling, the crew checklist) are answered deterministically
+    # from the engines that implement them. Without this, they fell through to SOP
+    # retrieval and returned "not part of the documented procedure" — the corpus
+    # has no reason to describe our own rules engine. Returns None for anything it
+    # doesn't clearly own, so the SOP corpus remains the default path.
+    system_answer = answer_system_question(routing_query)
+    if system_answer:
+        logger.info("general_response answered from system knowledge: %r", user_query)
+        return {
+            "final_response": system_answer,
+            "agents_completed": ["general_response"],
+            "answer_path": "system_knowledge",
+        }
+
+    # SECOND: factual questions about a named pipe or valve are answered from the
+    # live network graph. The SOP corpus documents the procedure, not the network,
+    # so "what road is pipe_033 on?" had no chance of being answered from it.
+    topology_answer = answer_topology_question(routing_query)
+    if topology_answer:
+        logger.info("general_response answered from topology graph: %r", user_query)
+        return {
+            "final_response": topology_answer,
+            "agents_completed": ["general_response"],
+            "answer_path": "topology",
+        }
+
+    # Otherwise default to grounded retrieval from the real ingested corpus — never
+    # the model's own pretrained knowledge (see _sop_grounded_answer). Only genuine
     # meta/help questions about the assistant itself get the capability-list path.
-    if _is_meta_help_question(user_query):
+    if _is_meta_help_question(routing_query):
         s = get_settings()
         query_lower = user_query.lower()
         in_scope = any(topic in query_lower for topic in _IN_SCOPE_TOPICS)
@@ -407,7 +457,7 @@ def general_response_node(state: OrchestratorState) -> dict:
             logger.error("General response error: %s", e)
             answer = "I'm sorry, I encountered an error. Please try again."
     else:
-        answer = _sop_grounded_answer(user_query)
+        answer, retrieved_chunks = _sop_grounded_answer(user_query)
 
     if _claims_banned_capability(answer):
         logger.warning(
@@ -425,6 +475,8 @@ def general_response_node(state: OrchestratorState) -> dict:
     return {
         "final_response": answer,
         "agents_completed": ["general_response"],
+        "answer_path": "sop_rag",
+        "retrieved_chunks": retrieved_chunks,
     }
 
 
@@ -435,6 +487,32 @@ def general_response_node(state: OrchestratorState) -> dict:
 # paying for an LLM round-trip.
 @mlflow.trace(name="off_topic", span_type=SpanType.AGENT)
 def off_topic_node(state: OrchestratorState) -> dict:
+    # The intent classifier is nondeterministic at the UNKNOWN/GENERAL_QUERY
+    # boundary, and it sometimes lands a legitimate question about OUR OWN
+    # mechanics here ("how do I mark a step as done?", "who do I contact if I
+    # can't finish a step?"). Declining those as off-topic is plainly wrong, so
+    # check system knowledge before refusing. Genuinely off-topic messages don't
+    # match any topic and still get the identical fixed decline.
+    user_query = state.get("user_query_raw", "")
+
+    system_answer = answer_system_question(user_query)
+    if system_answer:
+        logger.info("off_topic recovered a system-knowledge question: %r", user_query)
+        return {
+            "final_response": system_answer,
+            "agents_completed": ["general_response"],
+        }
+
+    # Same reasoning for a named pipe/valve — a question about a real asset in the
+    # network is never off-topic, whatever the classifier decided.
+    topology_answer = answer_topology_question(user_query)
+    if topology_answer:
+        logger.info("off_topic recovered a topology question: %r", user_query)
+        return {
+            "final_response": topology_answer,
+            "agents_completed": ["general_response"],
+        }
+
     return {
         "final_response": _OFF_TOPIC_DECLINE,
         "agents_completed": ["off_topic"],
@@ -866,10 +944,18 @@ def _commit_booking(state: OrchestratorState, answer: Any, start: str, end: str)
                     f"{_fmt_dt(p['proposed_start'])} → {_fmt_dt(p['proposed_end'])}."
                 )
 
-    lines.append(f"\n📄 [Download the full isolation report (PDF)](/api/v1/operations/{op_id}/report)")
+    # Save checklist snapshot for crew fallback (non-fatal if Neo4j unavailable)
+    sop_chain = state.get("sop_chain")
+    if sop_chain:
+        try:
+            from tools.crew_tools import save_checklist_snapshot
+            save_checklist_snapshot(op_id, sop_chain)
+        except Exception as _e:
+            logger.warning("Could not save crew checklist snapshot for %s: %s", op_id, _e)
+
+    lines.append(f"\n📄 [Download isolation report (PDF)](/api/v1/operations/{op_id}/report)")
+    lines.append(f"👷 [Share with crew](/crew/{op_id})")
     return {"final_response": "\n".join(lines), "booked_operation_id": op_id}
-
-
 # ── Emergency-vs-emergency: operator decides which runs first ────────────────
 def _emergency_priority_question(state: OrchestratorState, conflicts: list[dict]) -> str:
     pipe_id = state.get("pipe_id", "")
@@ -956,7 +1042,17 @@ def _commit_emergency_priority(state: OrchestratorState, choice, conflicts: list
             lines.append(f"↪ Rescheduled {p['operation_id']} → "
                          f"{_fmt_dt(p['proposed_start'])} → {_fmt_dt(p['proposed_end'])}.")
 
-    lines.append(f"\n📄 [Download the full isolation report (PDF)](/api/v1/operations/{op_id}/report)")
+    # Save checklist snapshot for crew fallback
+    sop_chain = state.get("sop_chain")
+    if sop_chain:
+        try:
+            from tools.crew_tools import save_checklist_snapshot
+            save_checklist_snapshot(op_id, sop_chain)
+        except Exception as _e:
+            logger.warning("Could not save crew checklist snapshot for %s: %s", op_id, _e)
+
+    lines.append(f"\n📄 [Download isolation report (PDF)](/api/v1/operations/{op_id}/report)")
+    lines.append(f"👷 [Share with crew](/crew/{op_id})")
     return {"final_response": "\n".join(lines), "booked_operation_id": op_id}
 
 
@@ -1176,6 +1272,39 @@ def invoke_graph(user_message: str, session_id: str | None = None) -> dict[str, 
     if not session_id:
         session_id = str(uuid4())
 
+    # ── Crew read-only restriction ────────────────────────────────────────────
+    # The crew page prefixes messages with "[FIELD CREW ...]". Crew members can
+    # ask questions (SOP, troubleshooting, supply checks) but CANNOT initiate
+    # operations planning or booking. They should contact their supervisor for that.
+    _CREW_PREFIX_RE = re.compile(r"^\[FIELD CREW[^\]]*\]")
+    is_crew = bool(_CREW_PREFIX_RE.match(user_message or ""))
+
+    if is_crew:
+        # Strip prefix for routing, keep for context
+        clean_msg = _CREW_PREFIX_RE.sub("", user_message).strip()
+        # Detect ops-planning intent keywords
+        _OPS_KEYWORDS = (
+            "shut down", "shutdown", "schedule", "book", "plan",
+            "maintenance", "inspection", "emergency",
+        )
+        wants_ops = any(k in clean_msg.lower() for k in _OPS_KEYWORDS)
+        # Also check if they're asking a question (read-only) vs commanding an action
+        _QUESTION_WORDS = ("?", "would", "will", "can", "does", "is", "are", "how", "what", "if")
+        is_question = any(w in clean_msg.lower().split()[:5] for w in _QUESTION_WORDS) or "?" in clean_msg
+
+        if wants_ops and not is_question:
+            return {
+                "final_response": (
+                    "I can help you with questions about the operation, valve procedures, "
+                    "and safety — but **booking or scheduling operations must be done by the "
+                    "ops planning team**.\n\n"
+                    "If you need an operation planned or an emergency shutdown initiated, "
+                    "contact your supervisor directly. You can flag the situation using the "
+                    "🚩 button on your checklist so the planning team is notified."
+                ),
+                "answer_path": "crew_restriction",
+            }
+
     graph = get_graph()
     config = {"configurable": {"thread_id": session_id}}
     snapshot = graph.get_state(config)
@@ -1226,6 +1355,8 @@ def invoke_graph(user_message: str, session_id: str | None = None) -> dict[str, 
         "agents_completed": [],
         "error_messages": [],
         "final_response": None,
+        "answer_path": None,
+        "retrieved_chunks": None,
     }
 
     result = graph.invoke(initial_state, config=config)

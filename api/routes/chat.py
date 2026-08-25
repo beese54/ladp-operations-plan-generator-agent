@@ -106,4 +106,6 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
         booked_operation_id=result.get("booked_operation_id"),
         processing_time_ms=elapsed_ms,
         schedule_view=schedule_view,
+        answer_path=result.get("answer_path"),
+        retrieved_chunks=result.get("retrieved_chunks"),
     )

@@ -67,6 +67,45 @@ CREATE INDEX IF NOT EXISTS idx_sched_ops_pipe_id ON scheduled_operations(pipe_id
 CREATE INDEX IF NOT EXISTS idx_sched_ops_dates   ON scheduled_operations(scheduled_start, scheduled_end);
 CREATE INDEX IF NOT EXISTS idx_sched_ops_status  ON scheduled_operations(status);
 CREATE INDEX IF NOT EXISTS idx_conflicts_op_id   ON scheduling_conflicts(new_operation_id);
+
+-- ── Field Crew Interface ───────────────────────────────────────────────────
+-- Snapshot of the SOP valve steps taken at booking time (fallback if Neo4j
+-- is unreachable when the crew opens the link).
+CREATE TABLE IF NOT EXISTS crew_checklist_steps (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation_id    TEXT NOT NULL REFERENCES scheduled_operations(operation_id) ON DELETE CASCADE,
+    step_number     INTEGER NOT NULL,
+    phase           TEXT NOT NULL,   -- "isolation" | "alternate_feed" | "re_feed" | "verify"
+    description     TEXT NOT NULL,
+    valve_id        TEXT,
+    pipe_id         TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(operation_id, step_number)
+);
+
+-- Live crew progress — one row per step per operation.
+CREATE TABLE IF NOT EXISTS crew_checklist_progress (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation_id    TEXT NOT NULL REFERENCES scheduled_operations(operation_id) ON DELETE CASCADE,
+    step_number     INTEGER NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'PENDING',  -- PENDING | DONE | FLAGGED
+    flag_note       TEXT,          -- only set when status = FLAGGED
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(operation_id, step_number)
+);
+
+-- Notes and complication reports submitted by field crew.
+CREATE TABLE IF NOT EXISTS crew_notes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation_id    TEXT NOT NULL REFERENCES scheduled_operations(operation_id) ON DELETE CASCADE,
+    step_number     INTEGER,       -- NULL = general note not tied to a step
+    message         TEXT NOT NULL,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_crew_steps_op    ON crew_checklist_steps(operation_id);
+CREATE INDEX IF NOT EXISTS idx_crew_progress_op ON crew_checklist_progress(operation_id);
+CREATE INDEX IF NOT EXISTS idx_crew_notes_op    ON crew_notes(operation_id);
 """
 
 

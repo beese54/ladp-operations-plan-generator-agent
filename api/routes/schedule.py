@@ -16,6 +16,7 @@ from tools.calendar_tools import (
     get_active_operations,
     get_upcoming_operations,
 )
+from tools.crew_tools import get_crew_summaries
 from tools.scheduling_rules import available_holiday_years, classify_day
 from agents.calendar_agent import _operations_in_range
 
@@ -60,6 +61,13 @@ async def get_month_schedule(
     touching = _operations_in_range(existing, month_iso, month_iso)
     by_id = {op["operation_id"]: op for op in existing}
     ops_full = [by_id[o["operation_id"]] for o in touching if o["operation_id"] in by_id]
+
+    # Field-crew progress for every operation shown this month, batched into one
+    # pass so the planner sees live completion + flagged complications without
+    # an extra request per operation.
+    crew = get_crew_summaries([op["operation_id"] for op in ops_full])
+    for op in ops_full:
+        op["crew"] = crew.get(op["operation_id"])
 
     holiday_years = available_holiday_years()
 

@@ -47,7 +47,8 @@ def ingest_sop_documents(sop_dir: Path = SOP_DIR) -> int:
 
     files = (list(sop_dir.glob("*.txt"))
              + list(sop_dir.glob("*.pdf"))
-             + list(sop_dir.glob("*.docx")))
+             + list(sop_dir.glob("*.docx"))
+             + list(sop_dir.glob("*.md")))
     if not files:
         logger.warning("No .txt or .pdf files found in %s", sop_dir)
         return 0

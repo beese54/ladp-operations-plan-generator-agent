@@ -2,8 +2,33 @@ import { useEffect, useState } from 'react'
 import GraphCanvas from './components/GraphCanvas.jsx'
 import CalendarView from './components/CalendarView.jsx'
 import ChatPanel from './components/ChatPanel.jsx'
+import CrewPage from './components/CrewPage.jsx'
+
+// Hash-based routing for the crew page: /crew/:operationId lives at
+// http://localhost:5174/#/crew/OPS-XXXXXXXX — no React Router needed,
+// same zero-dep approach as the rest of the app.
+function useCrewRoute() {
+  const [crewOpId, setCrewOpId] = useState(() => {
+    const h = window.location.hash
+    return h.startsWith('#/crew/') ? h.slice(7) : null
+  })
+  useEffect(() => {
+    const handler = () => {
+      const h = window.location.hash
+      setCrewOpId(h.startsWith('#/crew/') ? h.slice(7) : null)
+    }
+    window.addEventListener('hashchange', handler)
+    return () => window.removeEventListener('hashchange', handler)
+  }, [])
+  return crewOpId
+}
 
 export default function App() {
+  const crewOpId = useCrewRoute()
+
+  // If we're on a crew page, render that standalone — no graph/calendar/chat
+  if (crewOpId) return <CrewPage operationId={crewOpId} />
+
   const [graphData, setGraphData] = useState(null)
   const [graphError, setGraphError] = useState(null)
   const [trace, setTrace] = useState(null)
