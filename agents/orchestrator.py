@@ -82,6 +82,14 @@ Rules:
 - Resolve relative dates (today, tomorrow, next Monday) against the current date below.
 - Dates may be written day-first, e.g. "16-07-26" or "16/07/2026" means DD-MM-YY(YY).
   Interpret short numeric dates day-first and still output ISO YYYY-MM-DD.
+- IMPORTANT: A question asking whether an area or valve "would still have water" or
+  "still get supply" IF a pipe is down is a GENERAL_QUERY, NOT a SHUTDOWN request.
+  The user is asking a hypothetical question about the network, not requesting an
+  operation. Examples:
+    "If pipe_084 is down, would valve_037 still have water?" → GENERAL_QUERY
+    "Would valve_002 lose water if pipe_003 is shut down?" → GENERAL_QUERY
+    "Does pipe_084 have an alternate feed?" → GENERAL_QUERY
+    "What happens to the supply if pipe_033 goes down?" → GENERAL_QUERY
 Return ONLY the JSON object."""
 
 # Casual pipe references ("pipe 67", "Pipe67", "shut down 67") are normalized
@@ -1308,6 +1316,34 @@ def invoke_graph(user_message: str, session_id: str | None = None) -> dict[str, 
     graph = get_graph()
     config = {"configurable": {"thread_id": session_id}}
     snapshot = graph.get_state(config)
+
+    # ── Supply / alternate-feed questions — deterministic, skip the intent parser ─
+    # "If pipe_084 is down, would valve_037 still have water?" is a hypothetical
+    # question about network topology, NOT a shutdown request. The intent parser
+    # sometimes misclassifies it as SHUTDOWN (because it mentions a pipe + "down"),
+    # which sends it to the clarification node asking for a date. Catching it here
+    # guarantees it is answered from the live graph regardless of the LLM's mood.
+    # Only intercept supply-pattern questions; other topology questions (isolation
+    # chain, properties, turns) already route correctly via GENERAL_QUERY.
+    #
+    # Guard: require a CONDITIONAL framing word ("if", "would", "still", "lose",
+    # "have water") so that imperative shutdown requests like "shut down pipe_084
+    # next Monday" don't get caught by the "shut down" entry in _SUPPLY_WORDS.
+    from prompts.topology_answers import _SUPPLY_WORDS, _extract_ids as _topo_ids
+    _user_lower = (user_message or "").lower()
+    _SUPPLY_CONDITIONALS = ("if ", "would", "still", "lose water", "have water",
+                            "get water", "alternate feed", "alternative feed",
+                            "alt feed", "supply")
+    _has_supply_signal = (
+        any(w in _user_lower for w in _SUPPLY_WORDS)
+        and any(c in _user_lower for c in _SUPPLY_CONDITIONALS)
+    )
+    _has_pipe, _ = _topo_ids(_user_lower)
+    if _has_supply_signal and _has_pipe:
+        _supply_answer = answer_topology_question(user_message)
+        if _supply_answer:
+            _record_turn(graph, config, user_message, _supply_answer)
+            return {"final_response": _supply_answer, "answer_path": "topology"}
 
     # Serve the stored step-by-step isolation walkthrough on request. Read-only:
     # it does not start a new operation or disturb a pending interrupt, so a later
