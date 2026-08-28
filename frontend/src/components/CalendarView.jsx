@@ -42,16 +42,37 @@ export default function CalendarView({ year, month, onNavigate }) {
   const [selected, setSelected] = useState(null)
 
   useEffect(() => {
-    setLoading(true)
-    setError(null)
-    setSelected(null)
-    fetch(`/api/v1/schedule/month?year=${year}&month=${month}`)
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        return r.json()
-      })
-      .then(d => { setData(d); setLoading(false) })
-      .catch(e => { setError(e.message); setLoading(false) })
+    let cancelled = false
+
+    // showSpinner only on the visible month change, not on background polls —
+    // a poll must never blank out the grid the planner is reading.
+    const load = (showSpinner) => {
+      if (showSpinner) { setLoading(true); setError(null); setSelected(null) }
+      fetch(`/api/v1/schedule/month?year=${year}&month=${month}`)
+        .then(r => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`)
+          return r.json()
+        })
+        .then(d => {
+          if (cancelled) return
+          setData(d)
+          setLoading(false)
+          // Keep an open popover in sync with the refreshed crew progress
+          setSelected(prev => prev ? (d.days.find(x => x.date === prev.date) || prev) : prev)
+        })
+        .catch(e => {
+          if (cancelled) return
+          if (showSpinner) setError(e.message)
+          setLoading(false)
+        })
+    }
+
+    load(true)
+    // Poll so on-site crew progress and flagged complications surface without a
+    // manual refresh. 15s is responsive enough for field work and cheap — the
+    // month endpoint batches crew stats into a single query set.
+    const timer = setInterval(() => load(false), 15000)
+    return () => { cancelled = true; clearInterval(timer) }
   }, [year, month])
 
   function goToMonth(y, m) {
@@ -154,7 +175,13 @@ function DayCell({ day, isToday, onClick }) {
       {day.holiday_name && <div style={styles.holidayLabel}>{day.holiday_name}</div>}
       {chips.map(op => (
         <div key={op.operation_id} style={{ ...styles.chip, borderLeft: `3px solid ${chipColor(op)}` }}>
-          {op.pipe_id || op.operation_id}
+          <span style={styles.chipLabel}>
+            {op.crew?.flagged > 0 && <span style={styles.chipFlag}>🚩</span>}
+            {op.pipe_id || op.operation_id}
+          </span>
+          {op.crew && op.crew.total > 0 && (
+            <span style={styles.chipPct}>{Math.round(op.crew.percent_complete)}%</span>
+          )}
         </div>
       ))}
       {overflow > 0 && <div style={styles.chipMore}>+{overflow} more</div>}
@@ -194,9 +221,116 @@ function DetailPopover({ day, onClose }) {
             <div style={{ color: '#64748b', fontSize: 10.5 }}>
               {fmtTime(op.scheduled_start)} → {fmtTime(op.scheduled_end)}
             </div>
+            <CrewProgressBlock crew={op.crew} operationId={op.operation_id} />
+            {/* Crew link buttons — only for confirmed (non-cancelled) ops */}
+            {op.status !== 'CANCELLED' && (
+              <div style={styles.crewLinkRow}>
+                <button
+                  style={styles.crewLinkBtn}
+                  onClick={() => {
+                    const link = `${window.location.origin}/#/crew/${op.operation_id}`
+                    navigator.clipboard?.writeText(link).catch(() => {})
+                    window.alert(`Crew link copied:\n${link}`)
+                  }}
+                >
+                  🔗 Get Crew Link
+                </button>
+                <a
+                  href={`#/crew/${op.operation_id}`}
+                  style={styles.crewShareBtn}
+                >
+                  👷 Open Crew View
+                </a>
+              </div>
+            )}
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+// Field-crew progress for one operation, shown inside the detail popover.
+// Read-only: the planner watches on-site progress and any flagged
+// complications here. Data arrives with /schedule/month (op.crew) — no
+// separate request per operation.
+function CrewProgressBlock({ crew, operationId }) {
+  const [notes, setNotes] = useState(null)
+  const [notesOpen, setNotesOpen] = useState(false)
+
+  if (!crew || !crew.total) {
+    return (
+      <div style={styles.crewNoData}>
+        No crew checklist yet — the link hasn't been opened on site.
+      </div>
+    )
+  }
+
+  const pct = Math.round(crew.percent_complete)
+  const complete = crew.done === crew.total
+
+  const loadNotes = () => {
+    setNotesOpen(v => !v)
+    if (notes !== null) return
+    fetch(`/api/v1/crew/${operationId}/notes`)
+      .then(r => (r.ok ? r.json() : []))
+      .then(d => setNotes(Array.isArray(d) ? d : []))
+      .catch(() => setNotes([]))
+  }
+
+  return (
+    <div style={styles.crewBlock}>
+      <div style={styles.crewBarTrack}>
+        <div style={{
+          ...styles.crewBarFill,
+          width: `${pct}%`,
+          background: complete ? '#22c55e' : '#38bdf8',
+        }} />
+      </div>
+      <div style={styles.crewStatsRow}>
+        <span style={{ color: complete ? '#22c55e' : '#38bdf8', fontWeight: 600 }}>
+          {pct}% · {crew.done}/{crew.total} steps
+        </span>
+        {crew.flagged > 0 && (
+          <span style={styles.crewFlaggedCount}>🚩 {crew.flagged} flagged</span>
+        )}
+        {crew.note_count > 0 && (
+          <button style={styles.crewNotesToggle} onClick={loadNotes}>
+            💬 {crew.note_count} note{crew.note_count === 1 ? '' : 's'}
+          </button>
+        )}
+      </div>
+
+      {crew.flagged_steps?.length > 0 && (
+        <div style={styles.flaggedList}>
+          {crew.flagged_steps.map(fs => (
+            <div key={fs.step_number} style={styles.flaggedItem}>
+              <div style={styles.flaggedStepDesc}>
+                Step {fs.step_number}: {fs.description || '(step description unavailable)'}
+              </div>
+              <div style={styles.flaggedNote}>🚩 {fs.flag_note}</div>
+              {fs.updated_at && (
+                <div style={styles.flaggedTime}>{fmtTime(fs.updated_at)}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {notesOpen && notes !== null && (
+        <div style={styles.crewNotesList}>
+          {notes.length === 0
+            ? <div style={{ color: '#64748b', fontSize: 10.5 }}>No notes.</div>
+            : notes.map(n => (
+                <div key={n.id} style={styles.crewNoteItem}>
+                  <div style={{ color: '#cbd5e1' }}>{n.message}</div>
+                  <div style={styles.flaggedTime}>
+                    {n.step_number ? `Step ${n.step_number} · ` : ''}{fmtTime(n.created_at)}
+                  </div>
+                </div>
+              ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -211,7 +345,10 @@ function Legend() {
       <Dot colour="#f59e0b" label="In progress" />
       <Dot colour="#22c55e" label="Completed" />
       <Dot colour="#ef4444" label="Emergency" />
-      <span style={styles.legendHint}>Click a day for details</span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11 }}>
+        🚩 <span>Crew flagged an issue</span>
+      </span>
+      <span style={styles.legendHint}>Click a day for details · live crew progress</span>
     </div>
   )
 }
@@ -301,4 +438,48 @@ const styles = {
     display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0, flexWrap: 'wrap',
   },
   legendHint: { color: '#475569', fontSize: 10 },
+
+  // Crew link buttons inside the detail popover
+  crewLinkRow: { display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' },
+  crewLinkBtn: {
+    background: 'rgba(255,255,255,0.06)', border: '1px solid #334155',
+    borderRadius: 4, color: '#94a3b8', fontSize: 10, padding: '3px 8px',
+    cursor: 'pointer', fontFamily: 'inherit',
+  },
+  crewShareBtn: {
+    background: 'rgba(37, 99, 235, 0.15)', border: '1px solid #2563eb',
+    borderRadius: 4, color: '#93c5fd', fontSize: 10, padding: '3px 8px',
+    textDecoration: 'none', display: 'inline-flex', alignItems: 'center',
+  },
+
+  // Chip progress indicators (day cell)
+  chipLabel: { display: 'inline-flex', alignItems: 'center', gap: 3, overflow: 'hidden', textOverflow: 'ellipsis' },
+  chipFlag: { fontSize: 8.5, flexShrink: 0 },
+  chipPct: { color: '#38bdf8', fontSize: 8.5, fontWeight: 700, flexShrink: 0, marginLeft: 4 },
+
+  // Crew progress block (detail popover)
+  crewBlock: { marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 },
+  crewNoData: { marginTop: 6, fontSize: 10, color: '#475569', fontStyle: 'italic' },
+  crewBarTrack: { height: 5, background: '#334155', borderRadius: 3, overflow: 'hidden' },
+  crewBarFill: { height: '100%', borderRadius: 3, transition: 'width 0.4s ease' },
+  crewStatsRow: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, flexWrap: 'wrap' },
+  crewFlaggedCount: { color: '#f87171', fontWeight: 600 },
+  crewNotesToggle: {
+    background: 'none', border: 'none', color: '#94a3b8',
+    fontSize: 10, cursor: 'pointer', padding: 0, textDecoration: 'underline',
+    fontFamily: 'inherit',
+  },
+  flaggedList: { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 2 },
+  flaggedItem: {
+    background: 'rgba(239, 68, 68, 0.08)', borderLeft: '2px solid #ef4444',
+    borderRadius: 3, padding: '4px 6px',
+  },
+  flaggedStepDesc: { fontSize: 10, color: '#cbd5e1', lineHeight: 1.35 },
+  flaggedNote: { fontSize: 10.5, color: '#fca5a5', marginTop: 2, lineHeight: 1.35 },
+  flaggedTime: { fontSize: 9, color: '#475569', marginTop: 2 },
+  crewNotesList: {
+    display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4,
+    borderTop: '1px solid rgba(51,65,85,0.6)', paddingTop: 4,
+  },
+  crewNoteItem: { fontSize: 10.5, lineHeight: 1.35 },
 }

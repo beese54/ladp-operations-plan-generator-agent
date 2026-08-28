@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.middleware import RequestIDMiddleware, global_exception_handler
-from api.routes import health, chat, schedule, graph, reports
+from api.routes import health, chat, schedule, graph, reports, crew
 
 logging.basicConfig(
     level=logging.INFO,
@@ -82,6 +82,7 @@ def create_app() -> FastAPI:
     app.include_router(schedule.router, prefix="/api/v1", tags=["schedule"])
     app.include_router(graph.router,    prefix="/api/v1", tags=["graph"])
     app.include_router(reports.router,  prefix="/api/v1", tags=["reports"])
+    app.include_router(crew.router,     prefix="/api/v1", tags=["crew"])
 
     return app
 

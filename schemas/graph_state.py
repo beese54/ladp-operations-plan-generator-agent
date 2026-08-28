@@ -114,3 +114,7 @@ class OrchestratorState(TypedDict):
     agents_completed: Annotated[list[str], operator.add]
     error_messages: Annotated[list[str], operator.add]
     final_response: Optional[str]
+
+    # RAG Triad observability (set by general_response_node / off_topic_node)
+    answer_path: Optional[str]           # system_knowledge | topology | sop_rag | plan_pipeline | off_topic
+    retrieved_chunks: Optional[str]      # concatenated SOP chunk texts (for triad scoring)
